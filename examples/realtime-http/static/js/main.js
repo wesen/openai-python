@@ -144,9 +144,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                     
                 case 'text_delta':
-                    // Always update the existing AI message or create a new one
+                    // Update with the full accumulated text
                     console.log('Received text delta:', message.delta);
-                    updateOrCreateMessage('ai', message.delta, true, true);
+                    console.log('Full text so far:', message.text);
+                    updateOrCreateMessage('ai', message.text, false, true);
+                    break;
+                    
+                case 'user_transcript':
+                    // Display the transcript of the user's speech
+                    console.log('Received user transcript:', message.text);
+                    // Update the last user message with the transcript
+                    updateOrCreateMessage('user', message.text, false, true);
                     break;
                     
                 case 'response.done':
