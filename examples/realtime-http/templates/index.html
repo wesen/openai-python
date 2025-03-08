@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI Realtime Audio Chat</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>OpenAI Realtime Audio Chat</h1>
+            <div id="session-info">
+                <span id="connection-status">Connecting...</span>
+                <span id="session-id"></span>
+            </div>
+        </header>
+
+        <main>
+            <div class="chat-container">
+                <div id="chat-messages"></div>
+            </div>
+
+            <div class="controls">
+                <div class="audio-controls">
+                    <button id="start-recording" class="btn">Start Recording</button>
+                    <button id="stop-recording" class="btn" disabled>Stop Recording</button>
+                    <div id="recording-status">
+                        <span id="status-indicator"></span>
+                        <span id="status-text">Not recording</span>
+                    </div>
+                </div>
+
+                <div class="text-input">
+                    <input type="text" id="text-message" placeholder="Type a message...">
+                    <button id="send-text" class="btn">Send</button>
+                </div>
+            </div>
+        </main>
+
+        <div class="audio-visualizer">
+            <canvas id="visualizer"></canvas>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', path='/js/audio-processor.js') }}"></script>
+    <script src="{{ url_for('static', path='/js/visualizer.js') }}"></script>
+    <script src="{{ url_for('static', path='/js/main.js') }}"></script>
+</body>
+</html> 
