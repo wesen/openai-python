@@ -49,6 +49,7 @@ type Config struct {
 	TurnDetection string
 	Temperature   *float64
 	Logger        *zerolog.Logger // Optional logger for the client
+	LogLevel      zerolog.Level   // Optional log level (debug, info, warn, error)
 }
 
 // Event represents a message from the API
