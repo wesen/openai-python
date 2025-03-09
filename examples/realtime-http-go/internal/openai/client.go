@@ -48,7 +48,8 @@ type OpenAIMessage struct {
 // OpenAIResponse represents a response from OpenAI's Realtime API
 type OpenAIResponse struct {
 	Type       string          `json:"type"`
-	Session    string          `json:"session,omitempty"`
+	EventID    string          `json:"event_id,omitempty"`
+	Session    json.RawMessage `json:"session,omitempty"`
 	ItemID     string          `json:"item_id,omitempty"`
 	Delta      string          `json:"delta,omitempty"`
 	Content    json.RawMessage `json:"content,omitempty"`
@@ -358,6 +359,15 @@ func (c *RealtimeConnection) listenForMessages() {
 		var response OpenAIResponse
 		if err := json.Unmarshal(data, &response); err != nil {
 			log.Printf("[OpenAI Client] Error parsing OpenAI response: %v - Raw data: %s", err, string(data))
+
+			// Try to extract the type at least to see what kind of message this is
+			var typeOnly struct {
+				Type string `json:"type"`
+			}
+			if typeErr := json.Unmarshal(data, &typeOnly); typeErr == nil && typeOnly.Type != "" {
+				log.Printf("[OpenAI Client] Message type extraction: %s", typeOnly.Type)
+			}
+
 			continue
 		}
 

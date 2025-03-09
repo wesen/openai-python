@@ -81,3 +81,12 @@ Fixed critical issue with the OpenAI Realtime API parameter naming:
 - Fixed "missing_required_parameter" errors by correctly formatting session-related messages
 - Updated all OpenAI event handling to use the correct parameter name
 - Aligned the Go implementation with the Python SDK's parameter naming conventions 
+
+## 2023-03-09: Fixed OpenAI Response Parsing for Session Objects
+
+Fixed critical issue with parsing complex session objects in OpenAI API responses:
+- Updated OpenAIResponse struct to use json.RawMessage for flexible session field parsing
+- Added response type extraction to improve error logging for JSON parsing failures
+- Added EventID field to properly capture the event_id from responses
+- Improved error handling for malformed JSON responses
+- Enhanced debugging capability for OpenAI API response format changes 
