@@ -82,8 +82,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[WebSocket Server] New WebSocket connection request from %s", r.RemoteAddr)
 
-	// Log request headers for debugging
-	log.Printf("[WebSocket Server] Request headers: %v", r.Header)
+	// Log only header names for security
+	headerNames := make([]string, 0, len(r.Header))
+	for name := range r.Header {
+		headerNames = append(headerNames, name)
+	}
+	log.Printf("[WebSocket Server] Request headers: %v", headerNames)
 
 	// Upgrade HTTP connection to WebSocket
 	conn, err := s.wsUpgrader.Upgrade(w, r, nil)

@@ -246,7 +246,7 @@ func (cm *ConnectionManager) handleOpenAIEvents(conn *Connection, openaiConn Ope
 		// Handle the event based on its type
 		switch event.Type {
 		case "session.created":
-			log.Printf("[WS Manager] Session created with ID: %s", event.SessionID)
+			log.Printf("[WS Manager] Session created with ID: %s", event.Session)
 			conn.SendMessage(types.WebSocketMessage{
 				Type:   "session_created",
 				Status: "ready",

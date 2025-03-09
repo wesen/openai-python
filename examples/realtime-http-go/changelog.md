@@ -65,3 +65,19 @@ Improved the logging system to make it more readable and manageable when dealing
 - Improved readability of WebSocket binary messages
 - Added conditional logging based on message type and length
 - Standardized log format for audio-related operations 
+
+## 2023-03-09: Fixed OpenAI Realtime Session Management
+
+Fixed critical issues with the OpenAI Realtime API session management:
+- Removed premature session update attempts before session ID is received from the API
+- Fixed "missing_required_parameter" errors by waiting for the session.created event before attempting session updates
+- Improved security by not logging sensitive headers with API keys
+- Truncated request header logs to only show header names, not values 
+
+## 2023-03-09: Fixed Session Parameter Name in OpenAI API Requests
+
+Fixed critical issue with the OpenAI Realtime API parameter naming:
+- Changed `session_id` parameter to `session` to match the official OpenAI API requirements
+- Fixed "missing_required_parameter" errors by correctly formatting session-related messages
+- Updated all OpenAI event handling to use the correct parameter name
+- Aligned the Go implementation with the Python SDK's parameter naming conventions 
