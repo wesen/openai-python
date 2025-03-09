@@ -158,14 +158,23 @@ func (h *Handler) createOpenAIClient() api.OpenAIRealtimeClient {
 		return api.NewMockOpenAIRealtimeClient()
 	}
 
+	// Determine client type based on configuration
+	useHTTP := h.config.OpenAIUseHTTP
+	
 	// Create a real OpenAI client
-	return api.NewOpenAIRealtimeClient(h.config)
+	if useHTTP {
+		log.Info().Msg("Using HTTP-based OpenAI Realtime client")
+		return api.NewHTTPRealtimeClient(h.config)
+	} else {
+		log.Info().Msg("Using WebSocket-based OpenAI Realtime client")
+		return api.NewOpenAIRealtimeClient(h.config)
+	}
 }
 
 // registerOpenAIEventHandlers registers event handlers for OpenAI client
 func (h *Handler) registerOpenAIEventHandlers(session *ClientSession) {
 	// Handle all events (for logging)
-	session.OpenAIClient.(*api.DefaultOpenAIRealtimeClient).RegisterEventHandler("*", func(event map[string]interface{}) error {
+	session.OpenAIClient.RegisterEventHandler("*", func(event map[string]interface{}) error {
 		// Just log the event type for debugging
 		if eventType, ok := event["type"].(string); ok {
 			log.Debug().Str("session_id", session.ID).Str("event_type", eventType).Msg("OpenAI event")
@@ -174,7 +183,7 @@ func (h *Handler) registerOpenAIEventHandlers(session *ClientSession) {
 	})
 
 	// Handle text delta events
-	session.OpenAIClient.(*api.DefaultOpenAIRealtimeClient).RegisterEventHandler(api.EventTypeResponseTextDelta, func(event map[string]interface{}) error {
+	session.OpenAIClient.RegisterEventHandler(api.EventTypeResponseTextDelta, func(event map[string]interface{}) error {
 		// Forward to client
 		jsonMsg, _ := json.Marshal(event)
 		session.WSClient.Send <- jsonMsg
@@ -182,7 +191,7 @@ func (h *Handler) registerOpenAIEventHandlers(session *ClientSession) {
 	})
 
 	// Handle audio delta events
-	session.OpenAIClient.(*api.DefaultOpenAIRealtimeClient).RegisterEventHandler(api.EventTypeResponseAudioDelta, func(event map[string]interface{}) error {
+	session.OpenAIClient.RegisterEventHandler(api.EventTypeResponseAudioDelta, func(event map[string]interface{}) error {
 		// Forward to client
 		jsonMsg, _ := json.Marshal(event)
 		session.WSClient.Send <- jsonMsg
@@ -190,7 +199,7 @@ func (h *Handler) registerOpenAIEventHandlers(session *ClientSession) {
 	})
 
 	// Handle transcription events
-	session.OpenAIClient.(*api.DefaultOpenAIRealtimeClient).RegisterEventHandler(api.EventTypeConversationItemInputAudioTransComplete, func(event map[string]interface{}) error {
+	session.OpenAIClient.RegisterEventHandler(api.EventTypeConversationItemInputAudioTransComplete, func(event map[string]interface{}) error {
 		// Forward to client
 		jsonMsg, _ := json.Marshal(event)
 		session.WSClient.Send <- jsonMsg
@@ -198,7 +207,7 @@ func (h *Handler) registerOpenAIEventHandlers(session *ClientSession) {
 	})
 
 	// Handle error events
-	session.OpenAIClient.(*api.DefaultOpenAIRealtimeClient).RegisterEventHandler(api.EventTypeError, func(event map[string]interface{}) error {
+	session.OpenAIClient.RegisterEventHandler(api.EventTypeError, func(event map[string]interface{}) error {
 		// Forward to client
 		jsonMsg, _ := json.Marshal(event)
 		session.WSClient.Send <- jsonMsg
@@ -206,7 +215,7 @@ func (h *Handler) registerOpenAIEventHandlers(session *ClientSession) {
 	})
 
 	// Handle done events
-	session.OpenAIClient.(*api.DefaultOpenAIRealtimeClient).RegisterEventHandler(api.EventTypeResponseDone, func(event map[string]interface{}) error {
+	session.OpenAIClient.RegisterEventHandler(api.EventTypeResponseDone, func(event map[string]interface{}) error {
 		// Forward to client
 		jsonMsg, _ := json.Marshal(event)
 		session.WSClient.Send <- jsonMsg

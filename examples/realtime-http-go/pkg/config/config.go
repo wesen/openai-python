@@ -24,6 +24,7 @@ type Config struct {
 	OpenAIModelName    string
 	OpenAIAPIBase      string
 	OpenAIRequestLimit int
+	OpenAIUseHTTP      bool
 
 	// Audio configuration
 	AudioSampleRate int
@@ -60,6 +61,7 @@ func New() *Config {
 		OpenAIModelName:    getEnv("OPENAI_MODEL_NAME", "gpt-4o-realtime-preview"),
 		OpenAIAPIBase:      getEnv("OPENAI_API_BASE", "https://api.openai.com/v1"),
 		OpenAIRequestLimit: getEnvAsInt("OPENAI_REQUEST_LIMIT", 10),
+		OpenAIUseHTTP:      getEnvAsBool("OPENAI_USE_HTTP", false),
 
 		// Audio configuration
 		AudioSampleRate: getEnvAsInt("AUDIO_SAMPLE_RATE", 24000),
@@ -108,6 +110,20 @@ func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
 	}
 
 	value, err := time.ParseDuration(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// getEnvAsBool gets an environment variable as a boolean or returns a default value
+func getEnvAsBool(key string, defaultValue bool) bool {
+	valueStr := getEnv(key, "")
+	if valueStr == "" {
+		return defaultValue
+	}
+
+	value, err := strconv.ParseBool(valueStr)
 	if err != nil {
 		return defaultValue
 	}

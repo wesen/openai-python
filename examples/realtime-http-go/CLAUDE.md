@@ -25,6 +25,7 @@ This is a Go implementation of the OpenAI Realtime HTTP server, enabling real-ti
 - `LOG_LEVEL`: Logging level (debug, info, warn, error)
 - `TLS_CERT`: Path to TLS certificate (optional)
 - `TLS_KEY`: Path to TLS key (optional)
+- `OPENAI_USE_HTTP`: Set to "true" to use HTTP-based client instead of WebSockets (optional)
 
 ## Code Organization
 - `cmd/server/`: Main application entry point
@@ -52,7 +53,8 @@ This is a Go implementation of the OpenAI Realtime HTTP server, enabling real-ti
 
 ## Key Components Implementation
 - WebSocket connections manager
-- OpenAI Realtime client with event processing
+- OpenAI Realtime clients (WebSocket and HTTP implementations)
 - Audio format conversion with FFmpeg
 - JSON message protocol matching Python implementation
 - State management with concurrent access protection
+- Event-driven architecture with handlers for different event types
