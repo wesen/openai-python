@@ -1,0 +1,56 @@
+package templates
+
+templ Base(title string) {
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>{ title }</title>
+        <link rel="stylesheet" href="/static/css/styles.css" />
+        <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+        <script src="https://unpkg.com/htmx.org/dist/ext/ws.js"></script>
+    </head>
+    <body>
+        <div class="container">
+            { children... }
+        </div>
+    </body>
+    </html>
+}
+
+type Message struct {
+    Role    string
+    Content string
+}
+
+templ UserMessage(content string) {
+    <div class="message user-message">
+        { content }
+    </div>
+}
+
+templ AIMessage(content string) {
+    <div class="message ai-message">
+        { content }
+    </div>
+}
+
+templ ChatMessages(messages []Message) {
+    <div id="chat-messages" hx-swap-oob="beforeend">
+        for _, msg := range messages {
+            if msg.Role == "user" {
+                @UserMessage(msg.Content)
+            } else {
+                @AIMessage(msg.Content)
+            }
+        }
+    </div>
+}
+
+templ SessionInfo(id string, status string) {
+    <div id="session-info">
+        <span id="connection-status">{ status }</span>
+        <span id="session-id">{ id }</span>
+    </div>
+}

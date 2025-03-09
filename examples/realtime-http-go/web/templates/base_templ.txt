@@ -1,0 +1,12 @@
+<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>
+</title><link rel=\"stylesheet\" href=\"/static/css/styles.css\"><script src=\"https://unpkg.com/htmx.org@1.9.12\"></script><script src=\"https://unpkg.com/htmx.org/dist/ext/ws.js\"></script></head><body><div class=\"container\">
+</div></body></html>
+<div class=\"message user-message\">
+</div>
+<div class=\"message ai-message\">
+</div>
+<div id=\"chat-messages\" hx-swap-oob=\"beforeend\">
+</div>
+<div id=\"session-info\"><span id=\"connection-status\">
+</span> <span id=\"session-id\">
+</span></div>
