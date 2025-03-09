@@ -9,6 +9,14 @@ import (
 	"github.com/openai/realtime-http-go/internal/types"
 )
 
+// truncateForLogging truncates long strings for logging purposes
+func truncateForLogging(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen/2] + "..." + s[len(s)-maxLen/2:]
+}
+
 // Message represents a message sent over WebSocket
 type Message struct {
 	Type    string      `json:"type"`
@@ -123,7 +131,15 @@ func (cm *ConnectionManager) handleConnection(conn *Connection) {
 			return
 		}
 
-		log.Printf("[WS Manager] Received message type %d, raw data length: %d bytes", messageType, len(raw))
+		// Log received message with truncation for audio data
+		logMsg := string(raw)
+		if len(logMsg) > 200 && (messageType == websocket.BinaryMessage ||
+			(messageType == websocket.TextMessage && len(logMsg) > 1000)) {
+			log.Printf("[WS Manager] Received message type %d, length: %d bytes, data: %s",
+				messageType, len(raw), truncateForLogging(logMsg, 50))
+		} else {
+			log.Printf("[WS Manager] Received message type %d, raw data length: %d bytes", messageType, len(raw))
+		}
 
 		// Parse the message
 		var message types.WebSocketMessage
@@ -176,13 +192,17 @@ func (cm *ConnectionManager) handleConnection(conn *Connection) {
 			// Extract audio data
 			audioData, ok := message.Data.(string)
 			if !ok {
-				log.Printf("Invalid audio data")
+				log.Printf("[WS Manager] Invalid audio data")
 				continue
 			}
 
+			// Log truncated audio data
+			log.Printf("[WS Manager] Received audio data, length: %d bytes, data: %s",
+				len(audioData), truncateForLogging(audioData, 50))
+
 			// Process the audio data
 			if err := cm.processAudioData(conn, openaiConn, audioData); err != nil {
-				log.Printf("Error processing audio data: %v", err)
+				log.Printf("[WS Manager] Error processing audio data: %v", err)
 				conn.SendMessage(types.WebSocketMessage{
 					Type:    "error",
 					Message: "Error processing audio data",
@@ -282,13 +302,16 @@ func (cm *ConnectionManager) handleOpenAIEvents(conn *Connection, openaiConn Ope
 
 // processAudioData processes audio data from a WebSocket connection
 func (cm *ConnectionManager) processAudioData(conn *Connection, openaiConn OpenAIConnectionInterface, audioData string) error {
-	// Decode base64 audio data
-	data := audioData
-	if len(data) > 0 {
-		// Send the audio data to OpenAI
-		return openaiConn.SendAudio(data)
+	// Log the audio data with truncation
+	log.Printf("[WS Manager] Processing audio data, length: %d bytes, sample: %s",
+		len(audioData), truncateForLogging(audioData, 50))
+
+	// Send the audio data to OpenAI if not empty
+	if len(audioData) > 0 {
+		return openaiConn.SendAudio(audioData)
 	}
 
+	log.Printf("[WS Manager] Warning: Received empty audio data")
 	return nil
 }
 

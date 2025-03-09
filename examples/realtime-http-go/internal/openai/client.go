@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,8 +40,9 @@ type RealtimeConnection struct {
 
 // OpenAIMessage represents a message sent to OpenAI's Realtime API
 type OpenAIMessage struct {
-	Type    string          `json:"type"`
-	Content json.RawMessage `json:"content,omitempty"`
+	Type      string          `json:"type"`
+	SessionID string          `json:"session_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 // OpenAIResponse represents a response from OpenAI's Realtime API
@@ -160,12 +162,65 @@ func (c *RealtimeConnection) setupServerVAD() error {
 	return c.sendMessage(message)
 }
 
+// updateSession updates the session with the given session ID
+func (c *RealtimeConnection) updateSession() error {
+	if c.sessionID == "" {
+		return fmt.Errorf("cannot update session: no session ID available")
+	}
+
+	// Create update session message with session ID
+	sessionUpdate := map[string]interface{}{
+		"turn_detection": map[string]string{
+			"type": "server_vad",
+		},
+		"input_audio_transcription": map[string]string{
+			"model": "whisper-1",
+		},
+	}
+
+	// Marshal to JSON
+	content, err := json.Marshal(sessionUpdate)
+	if err != nil {
+		return fmt.Errorf("failed to marshal session update: %w", err)
+	}
+
+	// Log the session update payload
+	log.Printf("[OpenAI Client] Sending session update with session ID %s and payload: %s", c.sessionID, string(content))
+
+	// Create message with session ID
+	message := OpenAIMessage{
+		Type:      "session.update",
+		SessionID: c.sessionID,
+		Content:   content,
+	}
+
+	// Send message
+	return c.sendMessage(message)
+}
+
+// truncateForLogging truncates long strings for logging purposes
+func truncateForLogging(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen/2] + "..." + s[len(s)-maxLen/2:]
+}
+
 // SendAudio sends audio data to OpenAI
 func (c *RealtimeConnection) SendAudio(audioData string) error {
-	// Create message
+	// Check if we have a session ID
+	if c.sessionID == "" {
+		log.Printf("[OpenAI Client] Warning: Sending audio without session ID")
+	}
+
+	// Create message with truncated logging
+	log.Printf("[OpenAI Client] Sending audio data (length: %d bytes): %s",
+		len(audioData), truncateForLogging(audioData, 50))
+
 	message := OpenAIMessage{
-		Type:    "input_audio.data",
-		Content: json.RawMessage(fmt.Sprintf(`{"audio": "%s"}`, audioData)),
+		Type:      "input_audio.data",
+		SessionID: c.sessionID,
+		Content:   json.RawMessage(fmt.Sprintf(`{"audio": "%s"}`, audioData)),
 	}
 
 	// Send message
@@ -174,9 +229,15 @@ func (c *RealtimeConnection) SendAudio(audioData string) error {
 
 // CommitAudio commits the audio buffer
 func (c *RealtimeConnection) CommitAudio() error {
+	// Check if we have a session ID
+	if c.sessionID == "" {
+		log.Printf("[OpenAI Client] Warning: Committing audio without session ID")
+	}
+
 	// Create message
 	message := OpenAIMessage{
-		Type: "input_audio.commit",
+		Type:      "input_audio.commit",
+		SessionID: c.sessionID,
 	}
 
 	// Send message
@@ -186,7 +247,8 @@ func (c *RealtimeConnection) CommitAudio() error {
 
 	// Create response
 	message = OpenAIMessage{
-		Type: "response.create",
+		Type:      "response.create",
+		SessionID: c.sessionID,
 	}
 
 	// Send message
@@ -195,6 +257,11 @@ func (c *RealtimeConnection) CommitAudio() error {
 
 // SendText sends a text message to OpenAI
 func (c *RealtimeConnection) SendText(text string) error {
+	// Check if we have a session ID
+	if c.sessionID == "" {
+		log.Printf("[OpenAI Client] Warning: Sending text without session ID")
+	}
+
 	// Create content
 	content := map[string]interface{}{
 		"item": map[string]interface{}{
@@ -217,8 +284,9 @@ func (c *RealtimeConnection) SendText(text string) error {
 
 	// Create message
 	message := OpenAIMessage{
-		Type:    "conversation.item.create",
-		Content: contentJson,
+		Type:      "conversation.item.create",
+		SessionID: c.sessionID,
+		Content:   contentJson,
 	}
 
 	// Send message
@@ -228,7 +296,8 @@ func (c *RealtimeConnection) SendText(text string) error {
 
 	// Create response
 	responseMessage := OpenAIMessage{
-		Type: "response.create",
+		Type:      "response.create",
+		SessionID: c.sessionID,
 	}
 
 	// Send message
@@ -251,8 +320,20 @@ func (c *RealtimeConnection) sendMessage(message OpenAIMessage) error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
-	// Log the outgoing message
-	log.Printf("[OpenAI Client] Sending message: %s", string(data))
+	// Log the outgoing message, truncating audio data
+	logData := string(data)
+	if message.Type == "input_audio.data" && len(logData) > 100 {
+		// Extract the beginning of the JSON
+		prefix := logData[:100]
+		suffix := "..."
+		if len(logData) > 150 {
+			suffix += logData[len(logData)-50:]
+		}
+		log.Printf("[OpenAI Client] Sending message: %s%s (total length: %d bytes)",
+			prefix, suffix, len(logData))
+	} else {
+		log.Printf("[OpenAI Client] Sending message: %s", logData)
+	}
 
 	// Send message
 	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
@@ -286,8 +367,20 @@ func (c *RealtimeConnection) listenForMessages() {
 			return
 		}
 
-		// Log the raw incoming message
-		log.Printf("[OpenAI Client] Received message type: %d, data: %s", messageType, string(data))
+		// Log the raw incoming message, truncating if it's audio data
+		logData := string(data)
+		if strings.Contains(logData, "\"type\":\"response.audio.delta\"") && len(logData) > 100 {
+			// For audio responses, truncate the data
+			prefix := logData[:100]
+			suffix := "..."
+			if len(logData) > 150 {
+				suffix += logData[len(logData)-50:]
+			}
+			log.Printf("[OpenAI Client] Received message type: %d, data (truncated, total length: %d): %s%s",
+				messageType, len(logData), prefix, suffix)
+		} else {
+			log.Printf("[OpenAI Client] Received message type: %d, data: %s", messageType, logData)
+		}
 
 		// Parse message
 		var response OpenAIResponse
@@ -302,26 +395,70 @@ func (c *RealtimeConnection) listenForMessages() {
 		// Process message based on its type
 		switch response.Type {
 		case "session.created":
-			// Extract session ID
-			var sessionData map[string]interface{}
-			if err := json.Unmarshal(response.Content, &sessionData); err != nil {
-				log.Printf("[OpenAI Client] Error parsing session ID: %v", err)
+			// Extract session information from the response
+			// The session.created event contains a "session" object with an "id" field
+			var sessionResponse struct {
+				Session struct {
+					ID string `json:"id"`
+				} `json:"session"`
+			}
+
+			if err := json.Unmarshal(data, &sessionResponse); err != nil {
+				log.Printf("[OpenAI Client] Error parsing session response: %v", err)
 				continue
 			}
 
-			sessionID, ok := sessionData["session_id"].(string)
-			if !ok {
-				log.Printf("[OpenAI Client] Error parsing session ID: session_id not found or not a string in %v", sessionData)
+			if sessionResponse.Session.ID == "" {
+				log.Printf("[OpenAI Client] Error: received empty session ID")
 				continue
 			}
 
-			c.sessionID = sessionID
+			// Store the session ID
+			c.sessionID = sessionResponse.Session.ID
 			log.Printf("[OpenAI Client] Session created with ID: %s", c.sessionID)
+
+			// Update session with proper session ID to ensure subsequent operations work
+			if err := c.updateSession(); err != nil {
+				log.Printf("[OpenAI Client] Warning: Failed to update session after creation: %v", err)
+			}
 
 			// Send event
 			c.eventChan <- types.OpenAIEvent{
 				Type:      "session.created",
-				SessionID: sessionID,
+				SessionID: c.sessionID,
+			}
+
+		case "error":
+			// Extract error information
+			var errorResponse struct {
+				Error struct {
+					Type    string `json:"type"`
+					Code    string `json:"code"`
+					Message string `json:"message"`
+					Param   string `json:"param"`
+				} `json:"error"`
+			}
+
+			if err := json.Unmarshal(data, &errorResponse); err != nil {
+				log.Printf("[OpenAI Client] Error parsing error response: %v", err)
+			} else {
+				log.Printf("[OpenAI Client] Received error from OpenAI: %s - %s",
+					errorResponse.Error.Code, errorResponse.Error.Message)
+
+				// Handle "missing_required_parameter" errors with session
+				if errorResponse.Error.Code == "missing_required_parameter" &&
+					errorResponse.Error.Param == "session" && c.sessionID != "" {
+					log.Printf("[OpenAI Client] Attempting to recover from session error by updating session...")
+					if err := c.updateSession(); err != nil {
+						log.Printf("[OpenAI Client] Failed to recover session: %v", err)
+					}
+				}
+			}
+
+			// Send error event
+			c.eventChan <- types.OpenAIEvent{
+				Type:    "error",
+				Message: fmt.Sprintf("OpenAI API error: %s", string(data)),
 			}
 
 		case "session.updated":
