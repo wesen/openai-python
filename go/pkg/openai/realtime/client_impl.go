@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
 )
 
 // Constants for default values
@@ -33,6 +36,7 @@ type clientImpl struct {
 	isRunning     bool
 	runningMutex  sync.Mutex
 	eventChan     chan Event
+	logger        zerolog.Logger
 
 	// Buffer for assembling responses
 	responseMutex        sync.Mutex
@@ -47,20 +51,35 @@ func NewClient(apiKey string, model string) Client {
 		model = DefaultModel
 	}
 
+	// Set up a default logger that logs to stderr
+	logger := zerolog.New(os.Stderr).With().Timestamp().Logger().Level(zerolog.InfoLevel)
+
 	return &clientImpl{
 		apiKey:        apiKey,
 		model:         model,
 		eventHandlers: make(map[string][]EventHandler),
 		eventChan:     make(chan Event, 100), // Buffered channel for events
+		logger:        logger,
 	}
+}
+
+// SetLogger sets the logger for the client
+func (c *clientImpl) SetLogger(logger zerolog.Logger) {
+	c.logger = logger
 }
 
 // Connect establishes a WebSocket connection with the OpenAI Realtime API
 func (c *clientImpl) Connect(ctx context.Context) error {
 	// Check if already connected
 	if c.conn != nil {
+		c.logger.Debug().Msg("Client is already connected")
 		return errors.New("client is already connected")
 	}
+
+	c.logger.Info().
+		Str("model", c.model).
+		Str("url", BaseURL).
+		Msg("Connecting to OpenAI Realtime API")
 
 	// Create a context with timeout if the provided context doesn't have one
 	ctx, cancel := context.WithTimeout(ctx, ConnectionTimeout)
@@ -74,12 +93,32 @@ func (c *clientImpl) Connect(ctx context.Context) error {
 	headers.Add("Authorization", "Bearer "+c.apiKey)
 	headers.Add("OpenAI-Beta", "realtime=v1")
 
+	c.logger.Debug().Str("url", url).Msg("Dialing WebSocket")
+
 	// Establish connection
-	conn, _, err := dialer.DialContext(ctx, url, headers)
+	conn, resp, err := dialer.DialContext(ctx, url, headers)
 	if err != nil {
+		if resp != nil {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr == nil {
+				c.logger.Error().
+					Err(err).
+					Int("status_code", resp.StatusCode).
+					Str("response_body", string(body)).
+					Msg("Failed to connect to OpenAI Realtime API")
+			} else {
+				c.logger.Error().
+					Err(err).
+					Int("status_code", resp.StatusCode).
+					Msg("Failed to connect to OpenAI Realtime API")
+			}
+		} else {
+			c.logger.Error().Err(err).Msg("Failed to connect to OpenAI Realtime API")
+		}
 		return fmt.Errorf("failed to connect to OpenAI Realtime API: %w", err)
 	}
 	c.conn = conn
+	c.logger.Debug().Msg("WebSocket connection established")
 
 	// Start background listener for incoming messages
 	go c.listenLoop(context.Background())
@@ -94,6 +133,11 @@ func (c *clientImpl) Connect(ctx context.Context) error {
 	c.eventHandlers[EventSessionCreated] = append(c.eventHandlers[EventSessionCreated], func(e Event) error {
 		if sessionEvent, ok := e.(*SessionCreatedEvent); ok {
 			c.sessionID = sessionEvent.Session.SessionID
+			c.logger.Info().
+				Str("session_id", c.sessionID).
+				Str("model", sessionEvent.Session.Model).
+				Str("voice", sessionEvent.Session.Voice).
+				Msg("Session created")
 			close(sessionCreatedChan)
 		}
 		return nil
@@ -124,27 +168,29 @@ func (c *clientImpl) Connect(ctx context.Context) error {
 
 // Close terminates the WebSocket connection
 func (c *clientImpl) Close(ctx context.Context) error {
+	c.logger.Debug().Msg("Closing WebSocket connection")
+
 	if c.conn == nil {
-		return errors.New("not connected")
+		c.logger.Debug().Msg("WebSocket connection already closed")
+		return nil
 	}
 
-	// Stop the event listener loop
-	c.runningMutex.Lock()
-	c.isRunning = false
-	c.runningMutex.Unlock()
+	// Send close message
+	err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Error sending close message")
+	}
 
 	// Close the connection
-	err := c.conn.WriteControl(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		time.Now().Add(time.Second),
-	)
+	err = c.conn.Close()
 	if err != nil {
-		c.conn.Close()
+		c.logger.Error().Err(err).Msg("Error closing WebSocket connection")
+		return fmt.Errorf("error closing WebSocket connection: %w", err)
 	}
 
 	c.conn = nil
-	return err
+	c.logger.Info().Msg("WebSocket connection closed")
+	return nil
 }
 
 // SendAudio sends audio data to the API
@@ -230,103 +276,108 @@ func (c *clientImpl) ListenForEvents(ctx context.Context) error {
 	return nil
 }
 
-// listenLoop is an internal method that continuously reads from the WebSocket
-// and dispatches messages to the appropriate handlers
+// listenLoop reads messages from the WebSocket connection
 func (c *clientImpl) listenLoop(ctx context.Context) {
-	defer func() {
-		c.runningMutex.Lock()
-		c.isRunning = false
-		c.runningMutex.Unlock()
-	}()
+	c.logger.Debug().Msg("Starting WebSocket listen loop")
 
 	for {
-		// Check if we should stop
+		// Check if context is done
 		select {
 		case <-ctx.Done():
+			c.logger.Debug().Msg("Context cancelled, stopping WebSocket listen loop")
 			return
 		default:
 			// Continue
 		}
 
-		// Check if connection is still alive
+		// Check if connection is closed
 		if c.conn == nil {
+			c.logger.Error().Msg("WebSocket connection is nil, stopping listen loop")
 			return
 		}
 
-		// Read next message
+		// Read message from WebSocket
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			// Handle connection closed or error
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				// Normal closure
-				return
+				c.logger.Info().Msg("WebSocket closed normally")
+			} else if websocket.IsUnexpectedCloseError(err) {
+				c.logger.Error().Err(err).Msg("WebSocket closed unexpectedly")
+			} else {
+				c.logger.Error().Err(err).Msg("Error reading from WebSocket")
 			}
-
-			// Log error and exit loop
-			fmt.Printf("Error reading from WebSocket: %v\n", err)
 			return
 		}
 
-		// Process the message
+		// Handle the message
 		if err := c.handleMessage(message); err != nil {
-			fmt.Printf("Error handling message: %v\n", err)
+			c.logger.Error().Err(err).Msg("Error handling message")
 		}
 	}
 }
 
-// handleMessage parses a raw message and creates the appropriate event
+// genericEvent represents an event with an unknown type
+type genericEvent struct {
+	eventType string
+	data      []byte
+}
+
+// Type returns the type of the event
+func (e *genericEvent) Type() string {
+	return e.eventType
+}
+
+// RawData returns the raw data of the event
+func (e *genericEvent) RawData() []byte {
+	return e.data
+}
+
+// handleMessage processes a message received from the WebSocket
 func (c *clientImpl) handleMessage(data []byte) error {
-	// Parse the message to determine its type
-	var rawMsg struct {
-		Type string `json:"type"`
+	// Parse the event type
+	var eventMap map[string]interface{}
+	if err := json.Unmarshal(data, &eventMap); err != nil {
+		c.logger.Error().Err(err).Str("data", string(data)).Msg("Failed to parse message JSON")
+		return fmt.Errorf("failed to parse message JSON: %w", err)
 	}
 
-	if err := json.Unmarshal(data, &rawMsg); err != nil {
-		return fmt.Errorf("failed to parse message: %w", err)
+	// Extract the event type
+	eventType, ok := eventMap["type"].(string)
+	if !ok {
+		c.logger.Error().Str("data", string(data)).Msg("Message missing 'type' field")
+		return errors.New("message missing 'type' field")
 	}
 
-	// Create an event based on the type
+	c.logger.Debug().Str("event_type", eventType).Msg("Received event")
+
+	// Create the appropriate event object based on the type
 	var event Event
+	var err error
 
-	switch rawMsg.Type {
+	switch eventType {
 	case EventSessionCreated:
 		var e SessionCreatedEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventSessionUpdated:
 		var e SessionUpdatedEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventConversationItemCreated:
 		var e ConversationItemCreatedEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventTranscriptionCompleted:
 		var e TranscriptionCompletedEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventResponseCreated:
 		var e ResponseCreatedEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 		// Store the response ID for tracking
@@ -338,10 +389,7 @@ func (c *clientImpl) handleMessage(data []byte) error {
 
 	case EventContentPartAdded:
 		var e ContentPartAddedEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 		// Append the text part to our buffer
@@ -353,18 +401,12 @@ func (c *clientImpl) handleMessage(data []byte) error {
 
 	case EventContentPartDone:
 		var e ContentPartDoneEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventAudioDelta:
 		var e AudioDeltaEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 		// Decode and append the audio part to our buffer
@@ -381,42 +423,35 @@ func (c *clientImpl) handleMessage(data []byte) error {
 
 	case EventAudioDone:
 		var e AudioDoneEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventResponseDone:
 		var e ResponseDoneEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	case EventError:
 		var e ErrorEvent
-		if err := json.Unmarshal(data, &e); err != nil {
-			return err
-		}
-		e.BaseEvent = NewBaseEvent(rawMsg.Type, data)
+		err = json.Unmarshal(data, &e)
 		event = &e
 
 	default:
-		// Create a generic base event for unknown types
-		event = NewBaseEvent(rawMsg.Type, data)
+		c.logger.Warn().Str("event_type", eventType).Msg("Unknown event type")
+		// For unknown event types, create a generic event
+		event = &genericEvent{
+			eventType: eventType,
+			data:      data,
+		}
 	}
 
-	// Send the event to the channel for processing
-	select {
-	case c.eventChan <- event:
-		// Successfully sent event to channel
-	default:
-		// Channel is full, log warning
-		fmt.Printf("Event channel is full, dropping event of type: %s\n", rawMsg.Type)
+	if err != nil {
+		c.logger.Error().Err(err).Str("event_type", eventType).Msg("Error creating event object")
+		return err
 	}
 
+	// Add the event to the channel for processing
+	c.eventChan <- event
 	return nil
 }
 

@@ -18,6 +18,7 @@ This is a Go client library for the OpenAI Realtime API, which allows developers
 - **Audio format support**: Handle PCM audio data
 - **Error handling**: Robust error handling for WebSocket connections
 - **Function calling**: Support for OpenAI function calling (tools)
+- **Structured logging**: Zerolog-based structured logging with configurable levels
 
 ## Installation
 
@@ -37,18 +38,26 @@ import (
 	"time"
 
 	"github.com/go-go-golems/openai-realtime/pkg/openai/realtime"
+	"github.com/rs/zerolog"
 )
 
 func main() {
+	// Set up a logger
+	output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	logger := zerolog.New(output).With().Timestamp().Logger().Level(zerolog.InfoLevel)
+
 	// Create a client with your API key
 	client := realtime.NewClient(os.Getenv("OPENAI_API_KEY"), "")
+	
+	// Set the logger for the client
+	client.SetLogger(logger)
 
 	// Connect to the API
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := client.Connect(ctx); err != nil {
-		fmt.Printf("Failed to connect: %v\n", err)
+		logger.Error().Err(err).Msg("Failed to connect")
 		return
 	}
 	defer client.Close(ctx)
@@ -60,7 +69,7 @@ func main() {
 		Instructions: "You are a helpful assistant.",
 	}
 	if err := client.UpdateSession(ctx, config); err != nil {
-		fmt.Printf("Failed to update session: %v\n", err)
+		logger.Error().Err(err).Msg("Failed to update session")
 		return
 	}
 
@@ -69,14 +78,14 @@ func main() {
 
 	// Start listening for events
 	if err := client.ListenForEvents(ctx); err != nil {
-		fmt.Printf("Failed to start event listener: %v\n", err)
+		logger.Error().Err(err).Msg("Failed to start event listener")
 		return
 	}
 
 	// Send a text message and wait for response
 	responseText, responseAudio, err := assembler.SendTextAndWaitForResponse(ctx, "Hello, how are you?")
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		logger.Error().Err(err).Msg("Error getting response")
 		return
 	}
 
@@ -85,10 +94,10 @@ func main() {
 
 	// Save the audio to a file
 	if err := os.WriteFile("response.pcm", responseAudio, 0644); err != nil {
-		fmt.Printf("Failed to write audio: %v\n", err)
+		logger.Error().Err(err).Msg("Failed to write audio")
 		return
 	}
-	fmt.Println("Audio saved to response.pcm")
+	logger.Info().Str("file", "response.pcm").Msg("Audio saved to file")
 }
 ```
 
@@ -102,6 +111,9 @@ go run cmd/voice-assistant/main.go --api-key YOUR_API_KEY --text "Hello, how are
 
 # Using audio input
 go run cmd/voice-assistant/main.go --api-key YOUR_API_KEY --input input.pcm
+
+# With debug logging
+go run cmd/voice-assistant/main.go --api-key YOUR_API_KEY --text "Hello" --log-level debug
 ```
 
 Available flags:
@@ -111,6 +123,27 @@ Available flags:
 - `--output`: Output audio file (default: output.pcm)
 - `--instructions`: System instructions for the assistant
 - `--text`: Text input (instead of audio file)
+- `--log-level`: Logging level (debug, info, warn, error)
+
+## Logging
+
+The client includes structured logging with zerolog. You can configure the log level to help debug connection issues:
+
+- `debug`: Verbose logging including WebSocket message details, useful for troubleshooting
+- `info`: Standard operational information (default)
+- `warn`: Only warnings and errors
+- `error`: Only errors
+
+Example of enabling debug logging:
+
+```go
+// Create a console writer with pretty output
+output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+logger := zerolog.New(output).With().Timestamp().Logger().Level(zerolog.DebugLevel)
+
+// Set the logger for the client
+client.SetLogger(logger)
+```
 
 ## Audio Format
 
@@ -175,6 +208,22 @@ go captureAudio(audioChunks)
 responseText, responseAudio, err := assembler.StreamAudioAndWaitForResponse(
 	ctx, audioChunks, 100*time.Millisecond, false)
 ```
+
+### Debugging WebSocket Issues
+
+If you're experiencing WebSocket connection issues, enable debug logging to see detailed information about the connection process:
+
+```bash
+go run cmd/voice-assistant/main.go --api-key YOUR_API_KEY --text "Hello" --log-level debug
+```
+
+Common issues and solutions:
+
+1. **"use of closed network connection"**: This typically happens when the WebSocket connection is closed unexpectedly. Enable debug logging to see the exact reason for the closure.
+
+2. **"context deadline exceeded"**: This occurs when the connection takes too long to establish. This could be due to network issues or the API being temporarily unavailable.
+
+3. **"Failed to connect: 401 Unauthorized"**: Check that your API key is valid and has access to the Realtime API beta.
 
 ### Function Calling Support
 

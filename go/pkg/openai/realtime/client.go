@@ -3,6 +3,8 @@ package realtime
 
 import (
 	"context"
+
+	"github.com/rs/zerolog"
 )
 
 // Client provides methods to interact with the OpenAI Realtime API
@@ -30,6 +32,9 @@ type Client interface {
 
 	// UpdateSession updates the session configuration
 	UpdateSession(ctx context.Context, config *Config) error
+
+	// SetLogger sets the logger for the client
+	SetLogger(logger zerolog.Logger)
 }
 
 // Config stores configuration options for the Realtime client
@@ -43,6 +48,7 @@ type Config struct {
 	Instructions  string
 	TurnDetection string
 	Temperature   *float64
+	Logger        *zerolog.Logger // Optional logger for the client
 }
 
 // Event represents a message from the API
