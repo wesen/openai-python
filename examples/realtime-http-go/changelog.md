@@ -20,4 +20,15 @@ Fixed connection issues with the OpenAI Realtime API by updating the WebSocket U
 - Added model parameter to the WebSocket URL
 - Added support for `OPENAI_API_BASE` environment variable to customize the base URL
 - Added required `OpenAI-Beta: realtime=v1` header
-- Improved error logging when connecting to the API 
+- Improved error logging when connecting to the API
+
+## 2023-03-09: Added Comprehensive Debug Logging
+
+Enhanced the application with comprehensive debug logging to troubleshoot WebSocket connections:
+- Added detailed logging to the OpenAI client to track connection lifecycle and message exchange
+- Added logging to WebSocket server handlers to trace client connections
+- Enhanced WebSocket connection manager with message tracking
+- Added client-side JavaScript debugging for WebSocket connections and events
+- Improved error handling and reporting for the HTMX WebSocket extension
+- Added better parsing of session information from OpenAI responses
+- Fixed event handling in the client-side WebSocket code 

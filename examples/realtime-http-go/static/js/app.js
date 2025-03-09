@@ -6,6 +6,8 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('[Client] DOM loaded, initializing application');
+    
     // DOM Elements
     const elements = {
         startRecordingBtn: document.getElementById('start-recording'),
@@ -214,8 +216,30 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Send a message over WebSocket
     function sendWebSocketMessage(message) {
-        elements.messageSender.setAttribute('ws-send', JSON.stringify(message));
-        htmx.trigger(elements.messageSender, 'ws-send');
+        console.log('[Client] Sending WebSocket message:', message);
+        
+        if (!state.isConnected) {
+            console.warn('[Client] Cannot send message: WebSocket is not connected');
+            showError('Cannot send message: Not connected to the server');
+            return;
+        }
+        
+        try {
+            const jsonString = JSON.stringify(message);
+            elements.messageSender.setAttribute('ws-send', jsonString);
+            
+            // Trigger the send
+            const event = new CustomEvent('htmx:load', {
+                bubbles: true,
+                cancelable: true
+            });
+            
+            elements.messageSender.dispatchEvent(event);
+            console.log('[Client] Message sent successfully');
+        } catch (error) {
+            console.error('[Client] Error sending message:', error);
+            showError('Error sending message to server');
+        }
     }
     
     // Handle WebSocket messages (called by HTMX)
@@ -262,16 +286,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // Update connection status
-    function updateConnectionStatus(isConnected) {
+    function updateConnectionStatus(isConnected, statusText) {
         state.isConnected = isConnected;
         
         if (isConnected) {
-            elements.connectionStatus.textContent = 'Connected';
+            elements.connectionStatus.textContent = statusText || 'Connected';
             elements.connectionStatus.classList.remove('bg-warning', 'bg-danger');
             elements.connectionStatus.classList.add('bg-success');
             elements.startRecordingBtn.disabled = false;
         } else {
-            elements.connectionStatus.textContent = 'Disconnected';
+            elements.connectionStatus.textContent = statusText || 'Disconnected';
             elements.connectionStatus.classList.remove('bg-warning', 'bg-success');
             elements.connectionStatus.classList.add('bg-danger');
             elements.startRecordingBtn.disabled = true;
@@ -386,12 +410,33 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         // WebSocket connection handling
-        document.body.addEventListener('ws-close', () => {
+        document.body.addEventListener('htmx:wsConnecting', (event) => {
+            console.log('[Client] WebSocket connecting...', event.detail);
+            updateConnectionStatus(false, 'Connecting...');
+        });
+
+        document.body.addEventListener('htmx:wsOpen', (event) => {
+            console.log('[Client] WebSocket connection established', event.detail);
+            updateConnectionStatus(true);
+        });
+
+        document.body.addEventListener('htmx:wsClose', (event) => {
+            console.log('[Client] WebSocket connection closed', event.detail);
             updateConnectionStatus(false);
         });
-        
-        document.body.addEventListener('ws-open', () => {
-            updateConnectionStatus(true);
+
+        document.body.addEventListener('htmx:wsError', (event) => {
+            console.error('[Client] WebSocket error', event.detail);
+            updateConnectionStatus(false, 'Connection Error');
+            showError('WebSocket connection error. Please refresh the page to try again.');
+        });
+
+        document.body.addEventListener('htmx:wsBeforeSend', (event) => {
+            console.log('[Client] WebSocket sending message', event.detail);
+        });
+
+        document.body.addEventListener('htmx:wsAfterMessage', (event) => {
+            console.log('[Client] WebSocket received message', event.detail);
         });
     }
     

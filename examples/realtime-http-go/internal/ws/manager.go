@@ -65,6 +65,8 @@ func NewConnectionManager(openaiClient OpenAIClientInterface) *ConnectionManager
 
 // Connect adds a new WebSocket connection to the manager
 func (cm *ConnectionManager) Connect(conn *websocket.Conn) {
+	log.Printf("[WS Manager] Adding new WebSocket connection from %s", conn.RemoteAddr().String())
+
 	// Create a new connection
 	connection := &Connection{
 		Conn: conn,
@@ -75,10 +77,14 @@ func (cm *ConnectionManager) Connect(conn *websocket.Conn) {
 	cm.connections[conn] = connection
 	cm.mutex.Unlock()
 
+	log.Printf("[WS Manager] Connection added, total connections: %d", len(cm.connections))
+
 	// Send connection established message
 	connection.SendMessage(types.WebSocketMessage{
 		Type: "connection_established",
 	})
+
+	log.Printf("[WS Manager] Sent 'connection_established' message to client")
 
 	// Start listening for messages
 	go cm.handleConnection(connection)
@@ -86,10 +92,13 @@ func (cm *ConnectionManager) Connect(conn *websocket.Conn) {
 
 // handleConnection handles messages from a WebSocket connection
 func (cm *ConnectionManager) handleConnection(conn *Connection) {
+	log.Printf("[WS Manager] Starting message handler for connection from %s", conn.Conn.RemoteAddr().String())
+
 	// Initialize the OpenAI Realtime connection
+	log.Printf("[WS Manager] Initializing OpenAI connection")
 	openaiConn, err := cm.openaiClient.Connect(conn)
 	if err != nil {
-		log.Printf("Error connecting to OpenAI: %v", err)
+		log.Printf("[WS Manager] Error connecting to OpenAI: %v", err)
 		conn.SendMessage(types.WebSocketMessage{
 			Type:    "error",
 			Message: "Failed to connect to OpenAI",
@@ -98,28 +107,36 @@ func (cm *ConnectionManager) handleConnection(conn *Connection) {
 		return
 	}
 
+	log.Printf("[WS Manager] OpenAI connection established successfully")
+
 	// Set up an event handler for OpenAI events
+	log.Printf("[WS Manager] Starting OpenAI event handler")
 	go cm.handleOpenAIEvents(conn, openaiConn)
 
 	// Read messages from the WebSocket
+	log.Printf("[WS Manager] Starting WebSocket message reading loop")
 	for {
-		_, raw, err := conn.Conn.ReadMessage()
+		messageType, raw, err := conn.Conn.ReadMessage()
 		if err != nil {
-			log.Printf("Error reading from WebSocket: %v", err)
+			log.Printf("[WS Manager] Error reading from WebSocket: %v", err)
 			cm.Disconnect(conn.Conn)
 			return
 		}
 
+		log.Printf("[WS Manager] Received message type %d, raw data length: %d bytes", messageType, len(raw))
+
 		// Parse the message
 		var message types.WebSocketMessage
 		if err := json.Unmarshal(raw, &message); err != nil {
-			log.Printf("Error parsing WebSocket message: %v", err)
+			log.Printf("[WS Manager] Error parsing WebSocket message: %v, raw message: %s", err, string(raw))
 			conn.SendMessage(types.WebSocketMessage{
 				Type:    "error",
 				Message: "Invalid message format",
 			})
 			continue
 		}
+
+		log.Printf("[WS Manager] Parsed message type: %s", message.Type)
 
 		// Handle the message based on its type
 		switch message.Type {
@@ -195,15 +212,24 @@ func (cm *ConnectionManager) handleConnection(conn *Connection) {
 	}
 }
 
-// handleOpenAIEvents handles events from OpenAI Realtime API
+// handleOpenAIEvents handles events from the OpenAI connection
 func (cm *ConnectionManager) handleOpenAIEvents(conn *Connection, openaiConn OpenAIConnectionInterface) {
-	// Listen for events from OpenAI
-	for event := range openaiConn.Events() {
+	log.Printf("[WS Manager] Starting OpenAI event handler")
+
+	// Get the events channel
+	events := openaiConn.Events()
+
+	// Listen for events
+	for event := range events {
+		log.Printf("[WS Manager] Received OpenAI event: %s", event.Type)
+
+		// Handle the event based on its type
 		switch event.Type {
 		case "session.created":
+			log.Printf("[WS Manager] Session created with ID: %s", event.SessionID)
 			conn.SendMessage(types.WebSocketMessage{
-				Type:   "session.created",
-				ItemID: event.SessionID,
+				Type:   "session_created",
+				Status: "ready",
 			})
 
 		case "session.updated":
@@ -245,8 +271,13 @@ func (cm *ConnectionManager) handleOpenAIEvents(conn *Connection, openaiConn Ope
 				Type:    "error",
 				Message: event.Message,
 			})
+
+		default:
+			log.Printf("[WS Manager] Unhandled OpenAI event type: %s", event.Type)
 		}
 	}
+
+	log.Printf("[WS Manager] OpenAI event handler terminated")
 }
 
 // processAudioData processes audio data from a WebSocket connection
@@ -311,12 +342,16 @@ func (c *Connection) SendMessage(message types.WebSocketMessage) {
 	// Marshal the message to JSON
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling message: %v", err)
+		log.Printf("[WS Connection] Error marshaling message: %v", err)
 		return
 	}
 
+	log.Printf("[WS Connection] Sending message type: %s, data: %s", message.Type, string(data))
+
 	// Send the message
 	if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("Error writing to WebSocket: %v", err)
+		log.Printf("[WS Connection] Error writing to WebSocket: %v", err)
+	} else {
+		log.Printf("[WS Connection] Message sent successfully")
 	}
 }

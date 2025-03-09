@@ -80,16 +80,25 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[WebSocket Server] New WebSocket connection request from %s", r.RemoteAddr)
+
+	// Log request headers for debugging
+	log.Printf("[WebSocket Server] Request headers: %v", r.Header)
+
 	// Upgrade HTTP connection to WebSocket
 	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Error upgrading to WebSocket: %v", err)
+		log.Printf("[WebSocket Server] Error upgrading to WebSocket: %v", err)
 		http.Error(w, "Could not open WebSocket connection", http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("[WebSocket Server] WebSocket connection established with %s", conn.RemoteAddr().String())
+
 	// Add connection to manager
 	s.wsManager.Connect(conn)
+
+	log.Printf("[WebSocket Server] Added connection to WebSocket manager")
 }
 
 // handleDebugAudioFormat returns information about the expected audio format

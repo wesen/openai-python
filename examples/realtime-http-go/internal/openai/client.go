@@ -95,12 +95,18 @@ func (c *Client) Connect(wsConn *ws.Connection) (ws.OpenAIConnectionInterface, e
 	// Construct the full WebSocket URL
 	url := fmt.Sprintf("wss://%s/v1/realtime?model=%s", c.BaseURL, model)
 
-	log.Printf("Connecting to OpenAI Realtime at: %s", url)
+	log.Printf("[OpenAI Client] Connecting to OpenAI Realtime at: %s", url)
+	log.Printf("[OpenAI Client] Headers: %v", headers)
 
-	conn, _, err := dialer.DialContext(ctx, url, headers)
+	conn, resp, err := dialer.DialContext(ctx, url, headers)
 	if err != nil {
+		if resp != nil {
+			log.Printf("[OpenAI Client] Connection failed with status: %d, headers: %v",
+				resp.StatusCode, resp.Header)
+		}
 		return nil, fmt.Errorf("failed to connect to OpenAI: %w", err)
 	}
+	log.Printf("[OpenAI Client] WebSocket connection established successfully")
 
 	// Create Realtime connection
 	rtConn := &RealtimeConnection{
@@ -112,11 +118,13 @@ func (c *Client) Connect(wsConn *ws.Connection) (ws.OpenAIConnectionInterface, e
 	go rtConn.listenForMessages()
 
 	// Configure server-side VAD
+	log.Printf("[OpenAI Client] Setting up server VAD...")
 	err = rtConn.setupServerVAD()
 	if err != nil {
 		rtConn.Close()
 		return nil, fmt.Errorf("failed to set up server VAD: %w", err)
 	}
+	log.Printf("[OpenAI Client] Server VAD setup completed")
 
 	return rtConn, nil
 }
@@ -138,6 +146,9 @@ func (c *RealtimeConnection) setupServerVAD() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal session update: %w", err)
 	}
+
+	// Log the session update payload
+	log.Printf("[OpenAI Client] Sending session update with payload: %s", string(content))
 
 	// Create message
 	message := OpenAIMessage{
@@ -240,60 +251,77 @@ func (c *RealtimeConnection) sendMessage(message OpenAIMessage) error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
+	// Log the outgoing message
+	log.Printf("[OpenAI Client] Sending message: %s", string(data))
+
 	// Send message
 	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("[OpenAI Client] Error sending message: %v", err)
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
+	log.Printf("[OpenAI Client] Message sent successfully")
 	return nil
 }
 
 // listenForMessages listens for messages from OpenAI
 func (c *RealtimeConnection) listenForMessages() {
+	log.Printf("[OpenAI Client] Started listening for messages from OpenAI")
 	for {
 		// Check if connection is closed
 		c.closeMutex.Lock()
 		if c.closed {
 			c.closeMutex.Unlock()
+			log.Printf("[OpenAI Client] Connection closed, stopping message listener")
 			close(c.eventChan)
 			return
 		}
 		c.closeMutex.Unlock()
 
 		// Read message
-		_, data, err := c.conn.ReadMessage()
+		messageType, data, err := c.conn.ReadMessage()
 		if err != nil {
-			log.Printf("Error reading from OpenAI: %v", err)
+			log.Printf("[OpenAI Client] Error reading from OpenAI: %v", err)
 			c.Close()
 			return
 		}
 
+		// Log the raw incoming message
+		log.Printf("[OpenAI Client] Received message type: %d, data: %s", messageType, string(data))
+
 		// Parse message
 		var response OpenAIResponse
 		if err := json.Unmarshal(data, &response); err != nil {
-			log.Printf("Error parsing OpenAI response: %v", err)
+			log.Printf("[OpenAI Client] Error parsing OpenAI response: %v - Raw data: %s", err, string(data))
 			continue
 		}
+
+		// Log the parsed response type
+		log.Printf("[OpenAI Client] Parsed response type: %s", response.Type)
 
 		// Process message based on its type
 		switch response.Type {
 		case "session.created":
 			// Extract session ID
-			var session struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(response.Content, &session); err != nil {
-				log.Printf("Error parsing session ID: %v", err)
+			var sessionData map[string]interface{}
+			if err := json.Unmarshal(response.Content, &sessionData); err != nil {
+				log.Printf("[OpenAI Client] Error parsing session ID: %v", err)
 				continue
 			}
 
-			// Store session ID
-			c.sessionID = session.ID
+			sessionID, ok := sessionData["session_id"].(string)
+			if !ok {
+				log.Printf("[OpenAI Client] Error parsing session ID: session_id not found or not a string in %v", sessionData)
+				continue
+			}
+
+			c.sessionID = sessionID
+			log.Printf("[OpenAI Client] Session created with ID: %s", c.sessionID)
 
 			// Send event
 			c.eventChan <- types.OpenAIEvent{
 				Type:      "session.created",
-				SessionID: session.ID,
+				SessionID: sessionID,
 			}
 
 		case "session.updated":
