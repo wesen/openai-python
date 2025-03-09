@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -15,12 +16,16 @@ import (
 
 // OpenAI API endpoints
 const (
-	OpenAIRealtimeEndpoint = "wss://realtime.openai.com/v1/realtime"
+	// The OpenAI Realtime API endpoint follows the same pattern as other OpenAI APIs
+	// but uses wss:// protocol and /realtime path
+	OpenAIRealtimeEndpoint = "wss://api.openai.com/v1/realtime"
 )
 
 // Client represents an OpenAI client
 type Client struct {
 	APIKey string
+	// Allow for a custom base URL
+	BaseURL string
 }
 
 // RealtimeConnection represents a connection to OpenAI's Realtime API
@@ -50,9 +55,22 @@ type OpenAIResponse struct {
 
 // NewClient creates a new OpenAI client
 func NewClient(apiKey string) *Client {
+	// Check for custom base URL from environment variables
+	baseURL := getEnv("OPENAI_API_BASE", "api.openai.com")
+
 	return &Client{
-		APIKey: apiKey,
+		APIKey:  apiKey,
+		BaseURL: baseURL,
 	}
+}
+
+// getEnv gets an environment variable or returns a default value
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
 }
 
 // Connect connects to OpenAI's Realtime API
@@ -65,9 +83,21 @@ func (c *Client) Connect(wsConn *ws.Connection) (ws.OpenAIConnectionInterface, e
 	dialer := websocket.Dialer{}
 	headers := map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", c.APIKey)},
+		"OpenAI-Beta":   {"realtime=v1"},
 	}
 
-	conn, _, err := dialer.DialContext(ctx, OpenAIRealtimeEndpoint, headers)
+	// Construct the URL with the model name from the config
+	model := os.Getenv("OPENAI_MODEL")
+	if model == "" {
+		model = "gpt-4o-realtime-preview"
+	}
+
+	// Construct the full WebSocket URL
+	url := fmt.Sprintf("wss://%s/v1/realtime?model=%s", c.BaseURL, model)
+
+	log.Printf("Connecting to OpenAI Realtime at: %s", url)
+
+	conn, _, err := dialer.DialContext(ctx, url, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to OpenAI: %w", err)
 	}
