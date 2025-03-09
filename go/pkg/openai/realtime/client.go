@@ -1,0 +1,55 @@
+// Package realtime provides a client for the OpenAI Realtime API.
+package realtime
+
+import (
+	"context"
+)
+
+// Client provides methods to interact with the OpenAI Realtime API
+type Client interface {
+	// Connect establishes a WebSocket connection with the OpenAI Realtime API
+	Connect(ctx context.Context) error
+
+	// Close terminates the WebSocket connection
+	Close(ctx context.Context) error
+
+	// SendAudio sends audio data to the API
+	SendAudio(ctx context.Context, audio []byte) error
+
+	// CommitAudio signals that the user has finished speaking
+	CommitAudio(ctx context.Context) error
+
+	// SendText sends a text message to the API
+	SendText(ctx context.Context, text string) error
+
+	// SetEventHandler registers handlers for different event types
+	SetEventHandler(eventType string, handler EventHandler)
+
+	// ListenForEvents starts processing events from the API
+	ListenForEvents(ctx context.Context) error
+
+	// UpdateSession updates the session configuration
+	UpdateSession(ctx context.Context, config *Config) error
+}
+
+// Config stores configuration options for the Realtime client
+type Config struct {
+	APIKey        string
+	Model         string
+	Voice         string
+	Modalities    []string
+	InputFormat   string
+	OutputFormat  string
+	Instructions  string
+	TurnDetection string
+	Temperature   *float64
+}
+
+// Event represents a message from the API
+type Event interface {
+	Type() string
+	RawData() []byte
+}
+
+// EventHandler processes an event from the API
+type EventHandler func(Event) error
