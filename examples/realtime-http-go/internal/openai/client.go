@@ -42,7 +42,6 @@ type RealtimeConnection struct {
 type OpenAIMessage struct {
 	Type      string          `json:"type"`
 	SessionID string          `json:"session_id,omitempty"`
-	Session   json.RawMessage `json:"session,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
@@ -99,17 +98,13 @@ func (c *Client) Connect(wsConn *ws.Connection) (ws.OpenAIConnectionInterface, e
 	url := fmt.Sprintf("wss://%s/v1/realtime?model=%s", c.BaseURL, model)
 
 	log.Printf("[OpenAI Client] Connecting to OpenAI Realtime at: %s", url)
-	// Only log the header names, not the values to avoid exposing API keys
-	headerNames := make([]string, 0, len(headers))
-	for name := range headers {
-		headerNames = append(headerNames, name)
-	}
-	log.Printf("[OpenAI Client] Using headers: %v", headerNames)
+	log.Printf("[OpenAI Client] Headers: %v", headers)
 
 	conn, resp, err := dialer.DialContext(ctx, url, headers)
 	if err != nil {
 		if resp != nil {
-			log.Printf("[OpenAI Client] Connection failed with status: %d", resp.StatusCode)
+			log.Printf("[OpenAI Client] Connection failed with status: %d, headers: %v",
+				resp.StatusCode, resp.Header)
 		}
 		return nil, fmt.Errorf("failed to connect to OpenAI: %w", err)
 	}
@@ -138,21 +133,8 @@ func (c *Client) Connect(wsConn *ws.Connection) (ws.OpenAIConnectionInterface, e
 
 // setupServerVAD sets up server-side Voice Activity Detection
 func (c *RealtimeConnection) setupServerVAD() error {
-	// We'll no longer send the initial session.update message here
-	// Instead, we'll wait for a session.created event and then update the session
-	log.Printf("[OpenAI Client] Server VAD setup will be initialized after session creation")
-	return nil
-}
-
-// updateSession updates the session with the given session ID
-func (c *RealtimeConnection) updateSession() error {
-	if c.sessionID == "" {
-		return fmt.Errorf("cannot update session: no session ID available")
-	}
-
-	// Create update session message with session ID
+	// Create update session message
 	sessionUpdate := map[string]interface{}{
-		"id": c.sessionID,
 		"turn_detection": map[string]string{
 			"type": "server_vad",
 		},
@@ -161,23 +143,58 @@ func (c *RealtimeConnection) updateSession() error {
 		},
 	}
 
+	// Create message
+	message := map[string]interface{}{
+		"type":    "session.update",
+		"session": sessionUpdate,
+	}
+
 	// Marshal to JSON
-	sessionData, err := json.Marshal(sessionUpdate)
+	messageJson, err := json.Marshal(message)
 	if err != nil {
-		return fmt.Errorf("failed to marshal session update: %w", err)
+		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
-	// Log the session update payload
-	log.Printf("[OpenAI Client] Sending session update with session ID %s and payload: %s", c.sessionID, string(sessionData))
+	// Log the full JSON payload
+	log.Printf("[OpenAI Client] Sending message to OpenAI: %s", string(messageJson))
 
-	// Create message with the session parameter
-	message := OpenAIMessage{
-		Type:    "session.update",
-		Session: sessionData,
+	// Write directly to the connection
+	return c.conn.WriteMessage(websocket.TextMessage, messageJson)
+}
+
+// updateSession updates the session with the given session ID
+func (c *RealtimeConnection) updateSession() error {
+	if c.sessionID == "" {
+		return fmt.Errorf("cannot update session: no session ID available")
 	}
 
-	// Send message
-	return c.sendMessage(message)
+	// Create update session message with proper structure based on API docs
+	sessionUpdate := map[string]interface{}{
+		"turn_detection": map[string]string{
+			"type": "server_vad",
+		},
+		"input_audio_transcription": map[string]string{
+			"model": "whisper-1",
+		},
+	}
+
+	// Create message with session in the correct format
+	message := map[string]interface{}{
+		"type":    "session.update",
+		"session": sessionUpdate,
+	}
+
+	// Marshal message to JSON
+	messageJson, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	// Log the full JSON payload
+	log.Printf("[OpenAI Client] Sending message to OpenAI: %s", string(messageJson))
+
+	// Write directly to the connection
+	return c.conn.WriteMessage(websocket.TextMessage, messageJson)
 }
 
 // truncateForLogging truncates long strings for logging purposes
@@ -195,26 +212,28 @@ func (c *RealtimeConnection) SendAudio(audioData string) error {
 		log.Printf("[OpenAI Client] Warning: Sending audio without session ID")
 	}
 
-	// Create message with truncated logging
-	log.Printf("[OpenAI Client] Sending audio data (length: %d bytes): %s",
-		len(audioData), truncateForLogging(audioData, 50))
-
-	// Create session object for the message
-	sessionJSON, err := json.Marshal(map[string]string{
-		"id": c.sessionID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal session ID: %w", err)
-	}
-
-	message := OpenAIMessage{
-		Type:    "input_audio.data",
-		Session: sessionJSON,
-		Content: json.RawMessage(fmt.Sprintf(`{"audio": "%s"}`, audioData)),
+	// Create message in correct format
+	message := map[string]interface{}{
+		"type":  "input_audio_buffer.append",
+		"audio": audioData,
 	}
 
 	// Send message
-	return c.sendMessage(message)
+	messageJson, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	// Log the full JSON payload (truncated for audio data to avoid huge logs)
+	truncatedJson := string(messageJson)
+	if len(truncatedJson) > 200 {
+		audioLength := len(audioData)
+		truncatedJson = truncatedJson[:100] + "..." + fmt.Sprintf("[AUDIO DATA: %d bytes]", audioLength) + "..." + truncatedJson[len(truncatedJson)-50:]
+	}
+	log.Printf("[OpenAI Client] Sending audio message to OpenAI: %s", truncatedJson)
+
+	// Write directly to the connection
+	return c.conn.WriteMessage(websocket.TextMessage, messageJson)
 }
 
 // CommitAudio commits the audio buffer
@@ -224,123 +243,58 @@ func (c *RealtimeConnection) CommitAudio() error {
 		log.Printf("[OpenAI Client] Warning: Committing audio without session ID")
 	}
 
-	// Create session object for the message
-	sessionJSON, err := json.Marshal(map[string]string{
-		"id": c.sessionID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal session ID: %w", err)
-	}
-
-	// Create message
-	message := OpenAIMessage{
-		Type:    "input_audio.commit",
-		Session: sessionJSON,
+	// Create message in correct format
+	message := map[string]interface{}{
+		"type": "input_audio_buffer.commit",
 	}
 
 	// Send message
-	if err := c.sendMessage(message); err != nil {
+	messageJson, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	// Log the full JSON payload
+	log.Printf("[OpenAI Client] Sending commit message to OpenAI: %s", string(messageJson))
+
+	// Write directly to the connection
+	if err := c.conn.WriteMessage(websocket.TextMessage, messageJson); err != nil {
 		return err
 	}
 
-	// Create response
-	message = OpenAIMessage{
-		Type:    "response.create",
-		Session: sessionJSON,
-	}
-
-	// Send message
-	return c.sendMessage(message)
+	log.Printf("[OpenAI Client] Audio buffer committed successfully")
+	return nil
 }
 
-// SendText sends text to OpenAI
+// SendText sends a text message to OpenAI
 func (c *RealtimeConnection) SendText(text string) error {
 	// Check if we have a session ID
 	if c.sessionID == "" {
 		log.Printf("[OpenAI Client] Warning: Sending text without session ID")
 	}
 
-	// Create session object for the message
-	sessionJSON, err := json.Marshal(map[string]string{
-		"id": c.sessionID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal session ID: %w", err)
-	}
-
-	// Create conversation item data
-	itemData := map[string]interface{}{
-		"role":    "user",
-		"content": []map[string]string{{"type": "text", "text": text}},
+	// Create message in correct format
+	message := map[string]interface{}{
+		"type": "conversation.item.create",
+		"item": map[string]interface{}{
+			"role": "user",
+			"content": map[string]string{
+				"text": text,
+			},
+		},
 	}
 
 	// Marshal to JSON
-	itemJSON, err := json.Marshal(itemData)
+	messageJson, err := json.Marshal(message)
 	if err != nil {
-		return fmt.Errorf("failed to marshal item data: %w", err)
+		return fmt.Errorf("failed to marshal text message: %w", err)
 	}
 
-	// Create message
-	message := OpenAIMessage{
-		Type:    "conversation.item.create",
-		Session: sessionJSON,
-		Content: json.RawMessage(fmt.Sprintf(`{"item": %s}`, string(itemJSON))),
-	}
+	// Log the full JSON payload
+	log.Printf("[OpenAI Client] Sending text message to OpenAI: %s", string(messageJson))
 
-	// Send message
-	if err := c.sendMessage(message); err != nil {
-		return err
-	}
-
-	// Create response
-	message = OpenAIMessage{
-		Type:    "response.create",
-		Session: sessionJSON,
-	}
-
-	// Send message
-	return c.sendMessage(message)
-}
-
-// sendMessage sends a message to OpenAI
-func (c *RealtimeConnection) sendMessage(message OpenAIMessage) error {
-	// Check if connection is closed
-	c.closeMutex.Lock()
-	defer c.closeMutex.Unlock()
-
-	if c.closed {
-		return fmt.Errorf("connection is closed")
-	}
-
-	// Marshal message to JSON
-	data, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-
-	// Log the outgoing message, truncating audio data
-	logData := string(data)
-	if message.Type == "input_audio.data" && len(logData) > 100 {
-		// Extract the beginning of the JSON
-		prefix := logData[:100]
-		suffix := "..."
-		if len(logData) > 150 {
-			suffix += logData[len(logData)-50:]
-		}
-		log.Printf("[OpenAI Client] Sending message: %s%s (total length: %d bytes)",
-			prefix, suffix, len(logData))
-	} else {
-		log.Printf("[OpenAI Client] Sending message: %s", logData)
-	}
-
-	// Send message
-	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("[OpenAI Client] Error sending message: %v", err)
-		return fmt.Errorf("failed to send message: %w", err)
-	}
-
-	log.Printf("[OpenAI Client] Message sent successfully")
-	return nil
+	// Write directly to the connection
+	return c.conn.WriteMessage(websocket.TextMessage, messageJson)
 }
 
 // listenForMessages listens for messages from OpenAI
@@ -365,19 +319,36 @@ func (c *RealtimeConnection) listenForMessages() {
 			return
 		}
 
-		// Log the raw incoming message, truncating if it's audio data
+		// Log the raw incoming message, with appropriate handling for different message types
 		logData := string(data)
-		if strings.Contains(logData, "\"type\":\"response.audio.delta\"") && len(logData) > 100 {
-			// For audio responses, truncate the data
-			prefix := logData[:100]
-			suffix := "..."
-			if len(logData) > 150 {
-				suffix += logData[len(logData)-50:]
+		messageTypeStr := "TEXT"
+		if messageType == websocket.BinaryMessage {
+			messageTypeStr = "BINARY"
+		}
+
+		// Check if it's an audio response to truncate it appropriately
+		if strings.Contains(logData, "\"type\":\"response.audio.delta\"") {
+			// For audio responses, extract type and truncate the audio data
+			var partialParse struct {
+				Type  string `json:"type"`
+				Audio string `json:"audio,omitempty"`
 			}
-			log.Printf("[OpenAI Client] Received message type: %d, data (truncated, total length: %d): %s%s",
-				messageType, len(logData), prefix, suffix)
+			if err := json.Unmarshal(data, &partialParse); err == nil {
+				audioLength := len(partialParse.Audio)
+				log.Printf("[OpenAI Client] Received %s message: type=%s with %d bytes of audio data",
+					messageTypeStr, partialParse.Type, audioLength)
+			} else {
+				// Fall back to basic truncation if parsing fails
+				prefix := logData
+				if len(logData) > 100 {
+					prefix = logData[:100] + "..."
+				}
+				log.Printf("[OpenAI Client] Received %s message (truncated, total length: %d): %s",
+					messageTypeStr, len(logData), prefix)
+			}
 		} else {
-			log.Printf("[OpenAI Client] Received message type: %d, data: %s", messageType, logData)
+			// For non-audio messages, log the complete response
+			log.Printf("[OpenAI Client] Received %s message from OpenAI: %s", messageTypeStr, logData)
 		}
 
 		// Parse message

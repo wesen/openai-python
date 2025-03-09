@@ -66,18 +66,35 @@ Improved the logging system to make it more readable and manageable when dealing
 - Added conditional logging based on message type and length
 - Standardized log format for audio-related operations 
 
-## 2023-03-09: Fixed OpenAI Realtime Session Management
+## 2025-03-09: Fixed OpenAI Realtime API Message Format
 
-Fixed critical issues with the OpenAI Realtime API session management:
-- Removed premature session update attempts before session ID is received from the API
-- Fixed "missing_required_parameter" errors by waiting for the session.created event before attempting session updates
-- Improved security by not logging sensitive headers with API keys
-- Truncated request header logs to only show header names, not values 
+Fixed issues with the OpenAI Realtime API communication by updating the message format to match the official API specification:
+- Fixed session update messages to use `"session"` field instead of `"content"` to comply with the API requirements
+- Updated audio message format to use `"input_audio_buffer.append"` instead of `"input_audio.data"`
+- Changed audio commit format to use `"input_audio_buffer.commit"` instead of `"input_audio.commit"`
+- Simplified text message format to match the API specification for `"conversation.item.create"`
+- Removed unnecessary `"response.create"` calls that were causing errors
+- Restructured JSON payload format for all message types to correctly handle session information
+- Fixed session ID inclusion in update messages to ensure proper session tracking
+- Eliminated redundant message wrapping that was causing parsing errors on the server 
 
-## 2023-03-09: Fixed OpenAI Realtime API Message Format
+## 2025-03-09: Enhanced OpenAI Message Logging
 
-Fixed critical issues with the OpenAI Realtime API message format:
-- Corrected the request structure to properly include a "session" parameter with ID instead of using "session_id"
-- Fixed "missing_required_parameter" errors by following the correct message format per the official API specification
-- Updated all message types (audio data, commits, text messages) to use the correct session parameter structure
-- Changed conversation item creation format to match the expected API structure 
+Improved message logging for OpenAI API communication to help with debugging and API integration:
+- Added detailed JSON logging for all outgoing WebSocket messages to OpenAI
+- Enhanced incoming message logging to show complete message content
+- Formatted audio data logging to show message type and content length information
+- Added special handling for audio-related messages to avoid log bloat while still showing relevant details
+- Improved readability of WebSocket message types (TEXT/BINARY) in logs
+- Added consistent log prefixes for better log filtering and analysis
+- Enhanced message structure visibility to help with API debugging 
+
+## 2025-03-09: Fixed Session Update Message Format
+
+Fixed remaining session update structure issues based on official OpenAI Realtime API documentation:
+- Removed incorrect session ID field from the session update object
+- Aligned message structure exactly with the official API specification format
+- Fixed WebSocket connection handling to properly maintain session context
+- Updated error recovery mechanism to handle WebSocket reconnections
+- Improved session state tracking to prevent errors in message handling
+- Enhanced error messaging to provide clearer diagnostics for API protocol issues 
