@@ -1,0 +1,162 @@
+/* 
+ * OpenAI Realtime HTTP Client Styles
+ */
+
+/* General styles */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f8f9fa;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+/* Header styles */
+header {
+    margin-bottom: 2rem;
+}
+
+h1 {
+    color: #1e88e5;
+}
+
+#session-info {
+    font-size: 0.9rem;
+    color: #666;
+}
+
+#connection-status {
+    padding: 0.25rem 0.5rem;
+    border-radius: 5px;
+    color: white;
+}
+
+/* Chat container styles */
+.chat-container {
+    background-color: white;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+#chat-messages {
+    padding: 1rem;
+    height: 400px;
+    overflow-y: auto;
+}
+
+.message {
+    margin-bottom: 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 5px;
+    max-width: 80%;
+    position: relative;
+}
+
+.message.user {
+    background-color: #e3f2fd;
+    margin-left: auto;
+    text-align: right;
+}
+
+.message.assistant {
+    background-color: #f0f0f0;
+    margin-right: auto;
+}
+
+.role-label {
+    font-weight: bold;
+    margin-bottom: 0.25rem;
+    font-size: 0.8rem;
+    color: #1e88e5;
+}
+
+.message.assistant .role-label {
+    color: #333;
+}
+
+.content {
+    word-wrap: break-word;
+}
+
+/* Controls styles */
+.controls {
+    margin-top: 1rem;
+}
+
+.audio-controls {
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+}
+
+#recording-status {
+    margin-left: 1rem;
+    display: flex;
+    align-items: center;
+}
+
+.indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #ccc;
+    margin-right: 0.5rem;
+}
+
+.indicator.recording {
+    background-color: #f44336;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+/* Audio visualizer styles */
+.audio-visualizer {
+    margin-top: 2rem;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+#visualizer {
+    display: block;
+    width: 100%;
+    height: 100px;
+    background-color: #f8f9fa;
+}
+
+/* Error message styles */
+.alert {
+    margin-bottom: 1rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 576px) {
+    .message {
+        max-width: 90%;
+    }
+    
+    .controls {
+        flex-direction: column;
+    }
+    
+    .audio-controls {
+        margin-bottom: 1rem;
+    }
+    
+    .text-input {
+        flex-direction: column;
+    }
+    
+    #text-message {
+        margin-bottom: 0.5rem;
+    }
+} 
