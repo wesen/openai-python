@@ -40,16 +40,16 @@ type RealtimeConnection struct {
 
 // OpenAIMessage represents a message sent to OpenAI's Realtime API
 type OpenAIMessage struct {
-	Type    string          `json:"type"`
-	Session string          `json:"session,omitempty"`
-	Content json.RawMessage `json:"content,omitempty"`
+	Type      string          `json:"type"`
+	SessionID string          `json:"session_id,omitempty"`
+	Session   json.RawMessage `json:"session,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 // OpenAIResponse represents a response from OpenAI's Realtime API
 type OpenAIResponse struct {
 	Type       string          `json:"type"`
-	EventID    string          `json:"event_id,omitempty"`
-	Session    json.RawMessage `json:"session,omitempty"`
+	SessionID  string          `json:"session_id,omitempty"`
 	ItemID     string          `json:"item_id,omitempty"`
 	Delta      string          `json:"delta,omitempty"`
 	Content    json.RawMessage `json:"content,omitempty"`
@@ -152,6 +152,7 @@ func (c *RealtimeConnection) updateSession() error {
 
 	// Create update session message with session ID
 	sessionUpdate := map[string]interface{}{
+		"id": c.sessionID,
 		"turn_detection": map[string]string{
 			"type": "server_vad",
 		},
@@ -161,19 +162,18 @@ func (c *RealtimeConnection) updateSession() error {
 	}
 
 	// Marshal to JSON
-	content, err := json.Marshal(sessionUpdate)
+	sessionData, err := json.Marshal(sessionUpdate)
 	if err != nil {
 		return fmt.Errorf("failed to marshal session update: %w", err)
 	}
 
 	// Log the session update payload
-	log.Printf("[OpenAI Client] Sending session update with session ID %s and payload: %s", c.sessionID, string(content))
+	log.Printf("[OpenAI Client] Sending session update with session ID %s and payload: %s", c.sessionID, string(sessionData))
 
-	// Create message with session ID
+	// Create message with the session parameter
 	message := OpenAIMessage{
 		Type:    "session.update",
-		Session: c.sessionID,
-		Content: content,
+		Session: sessionData,
 	}
 
 	// Send message
@@ -199,9 +199,17 @@ func (c *RealtimeConnection) SendAudio(audioData string) error {
 	log.Printf("[OpenAI Client] Sending audio data (length: %d bytes): %s",
 		len(audioData), truncateForLogging(audioData, 50))
 
+	// Create session object for the message
+	sessionJSON, err := json.Marshal(map[string]string{
+		"id": c.sessionID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal session ID: %w", err)
+	}
+
 	message := OpenAIMessage{
 		Type:    "input_audio.data",
-		Session: c.sessionID,
+		Session: sessionJSON,
 		Content: json.RawMessage(fmt.Sprintf(`{"audio": "%s"}`, audioData)),
 	}
 
@@ -216,10 +224,18 @@ func (c *RealtimeConnection) CommitAudio() error {
 		log.Printf("[OpenAI Client] Warning: Committing audio without session ID")
 	}
 
+	// Create session object for the message
+	sessionJSON, err := json.Marshal(map[string]string{
+		"id": c.sessionID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal session ID: %w", err)
+	}
+
 	// Create message
 	message := OpenAIMessage{
 		Type:    "input_audio.commit",
-		Session: c.sessionID,
+		Session: sessionJSON,
 	}
 
 	// Send message
@@ -230,36 +246,45 @@ func (c *RealtimeConnection) CommitAudio() error {
 	// Create response
 	message = OpenAIMessage{
 		Type:    "response.create",
-		Session: c.sessionID,
+		Session: sessionJSON,
 	}
 
 	// Send message
 	return c.sendMessage(message)
 }
 
-// SendText sends a text message to OpenAI
+// SendText sends text to OpenAI
 func (c *RealtimeConnection) SendText(text string) error {
 	// Check if we have a session ID
 	if c.sessionID == "" {
 		log.Printf("[OpenAI Client] Warning: Sending text without session ID")
 	}
 
-	// Create content JSON with text message
-	contentJson, err := json.Marshal(map[string]interface{}{
-		"item": map[string]interface{}{
-			"type": "text",
-			"text": text,
-		},
+	// Create session object for the message
+	sessionJSON, err := json.Marshal(map[string]string{
+		"id": c.sessionID,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal text message: %w", err)
+		return fmt.Errorf("failed to marshal session ID: %w", err)
+	}
+
+	// Create conversation item data
+	itemData := map[string]interface{}{
+		"role":    "user",
+		"content": []map[string]string{{"type": "text", "text": text}},
+	}
+
+	// Marshal to JSON
+	itemJSON, err := json.Marshal(itemData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal item data: %w", err)
 	}
 
 	// Create message
 	message := OpenAIMessage{
 		Type:    "conversation.item.create",
-		Session: c.sessionID,
-		Content: contentJson,
+		Session: sessionJSON,
+		Content: json.RawMessage(fmt.Sprintf(`{"item": %s}`, string(itemJSON))),
 	}
 
 	// Send message
@@ -267,14 +292,14 @@ func (c *RealtimeConnection) SendText(text string) error {
 		return err
 	}
 
-	// Create response message to generate a response
-	responseMessage := OpenAIMessage{
+	// Create response
+	message = OpenAIMessage{
 		Type:    "response.create",
-		Session: c.sessionID,
+		Session: sessionJSON,
 	}
 
 	// Send message
-	return c.sendMessage(responseMessage)
+	return c.sendMessage(message)
 }
 
 // sendMessage sends a message to OpenAI
@@ -359,15 +384,6 @@ func (c *RealtimeConnection) listenForMessages() {
 		var response OpenAIResponse
 		if err := json.Unmarshal(data, &response); err != nil {
 			log.Printf("[OpenAI Client] Error parsing OpenAI response: %v - Raw data: %s", err, string(data))
-
-			// Try to extract the type at least to see what kind of message this is
-			var typeOnly struct {
-				Type string `json:"type"`
-			}
-			if typeErr := json.Unmarshal(data, &typeOnly); typeErr == nil && typeOnly.Type != "" {
-				log.Printf("[OpenAI Client] Message type extraction: %s", typeOnly.Type)
-			}
-
 			continue
 		}
 
@@ -406,8 +422,8 @@ func (c *RealtimeConnection) listenForMessages() {
 
 			// Send event
 			c.eventChan <- types.OpenAIEvent{
-				Type:    "session.created",
-				Session: c.sessionID,
+				Type:      "session.created",
+				SessionID: c.sessionID,
 			}
 
 		case "error":

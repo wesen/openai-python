@@ -74,19 +74,10 @@ Fixed critical issues with the OpenAI Realtime API session management:
 - Improved security by not logging sensitive headers with API keys
 - Truncated request header logs to only show header names, not values 
 
-## 2023-03-09: Fixed Session Parameter Name in OpenAI API Requests
+## 2023-03-09: Fixed OpenAI Realtime API Message Format
 
-Fixed critical issue with the OpenAI Realtime API parameter naming:
-- Changed `session_id` parameter to `session` to match the official OpenAI API requirements
-- Fixed "missing_required_parameter" errors by correctly formatting session-related messages
-- Updated all OpenAI event handling to use the correct parameter name
-- Aligned the Go implementation with the Python SDK's parameter naming conventions 
-
-## 2023-03-09: Fixed OpenAI Response Parsing for Session Objects
-
-Fixed critical issue with parsing complex session objects in OpenAI API responses:
-- Updated OpenAIResponse struct to use json.RawMessage for flexible session field parsing
-- Added response type extraction to improve error logging for JSON parsing failures
-- Added EventID field to properly capture the event_id from responses
-- Improved error handling for malformed JSON responses
-- Enhanced debugging capability for OpenAI API response format changes 
+Fixed critical issues with the OpenAI Realtime API message format:
+- Corrected the request structure to properly include a "session" parameter with ID instead of using "session_id"
+- Fixed "missing_required_parameter" errors by following the correct message format per the official API specification
+- Updated all message types (audio data, commits, text messages) to use the correct session parameter structure
+- Changed conversation item creation format to match the expected API structure 
