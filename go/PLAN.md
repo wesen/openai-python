@@ -277,19 +277,31 @@ These events are sent from the OpenAI server to the client:
 ```go
 type SessionCreatedEvent struct {
     Type    string `json:"type"` // "session.created"
+    EventID string `json:"event_id"`
     Session struct {
-        SessionID        string   `json:"session_id"`
-        Model            string   `json:"model"`
-        Voice            string   `json:"voice,omitempty"`
-        InputAudioFormat string   `json:"input_audio_format,omitempty"`
-        OutputAudioFormat string  `json:"output_audio_format,omitempty"`
-        Modalities       []string `json:"modalities,omitempty"`
-        TurnDetection    struct {
-            Type string `json:"type"` // "server_vad" or "disabled"
-        } `json:"turn_detection,omitempty"`
-        Instructions     string   `json:"instructions,omitempty"`
-        Temperature      *float64 `json:"temperature,omitempty"`
-        // Additional session configuration fields
+        ID                  string   `json:"id"`
+        Object              string   `json:"object"` // "realtime.session"
+        Model               string   `json:"model"`
+        ExpiresAt           int64    `json:"expires_at"`
+        Modalities          []string `json:"modalities"`
+        Instructions        string   `json:"instructions"`
+        Voice               string   `json:"voice"`
+        TurnDetection       struct {
+            Type               string  `json:"type"` // "server_vad" or "disabled"
+            Threshold          float64 `json:"threshold,omitempty"`
+            PrefixPaddingMs    int     `json:"prefix_padding_ms,omitempty"`
+            SilenceDurationMs  int     `json:"silence_duration_ms,omitempty"`
+            CreateResponse     bool    `json:"create_response,omitempty"`
+            InterruptResponse  bool    `json:"interrupt_response,omitempty"`
+        } `json:"turn_detection"`
+        InputAudioFormat       string  `json:"input_audio_format"`
+        OutputAudioFormat      string  `json:"output_audio_format"`
+        InputAudioTranscription interface{} `json:"input_audio_transcription"`
+        ToolChoice              string  `json:"tool_choice"`
+        Temperature            float64 `json:"temperature"`
+        MaxResponseOutputTokens string  `json:"max_response_output_tokens"`
+        ClientSecret           interface{} `json:"client_secret"`
+        Tools                  []interface{} `json:"tools"`
     } `json:"session"`
 }
 ```
@@ -450,6 +462,13 @@ type AudioBufferCommitRequest struct {
 }
 ```
 
+- [x] `input_audio_buffer.clear` - Clear any buffered audio
+```go
+type AudioBufferClearRequest struct {
+    Type string `json:"type"` // "input_audio_buffer.clear"
+}
+```
+
 - [x] `conversation.item.create` - Send a text message from the user
 ```go
 type ConversationItemCreateRequest struct {
@@ -468,11 +487,33 @@ type ConversationItemCreateRequest struct {
 }
 ```
 
-- [x] `input_text` - Simplified alias for sending text (instead of conversation.item.create)
+- [x] `conversation.item.truncate` - Truncate conversation history
 ```go
-type InputTextRequest struct {
-    Type string `json:"type"` // "input_text"
-    Text string `json:"text"` // The text message
+type ConversationItemTruncateRequest struct {
+    Type string `json:"type"` // "conversation.item.truncate"
+    ItemID string `json:"item_id"` // ID of the item to truncate from
+}
+```
+
+- [x] `conversation.item.delete` - Delete a specific conversation item
+```go
+type ConversationItemDeleteRequest struct {
+    Type string `json:"type"` // "conversation.item.delete"
+    ItemID string `json:"item_id"` // ID of the item to delete
+}
+```
+
+- [x] `response.create` - Explicitly request a response from the model
+```go
+type ResponseCreateRequest struct {
+    Type string `json:"type"` // "response.create"
+}
+```
+
+- [x] `response.cancel` - Cancel an ongoing response generation
+```go
+type ResponseCancelRequest struct {
+    Type string `json:"type"` // "response.cancel"
 }
 ```
 

@@ -54,18 +54,31 @@ func NewBaseEvent(eventType string, rawData []byte) *BaseEvent {
 // SessionCreatedEvent represents the session.created event
 type SessionCreatedEvent struct {
 	*BaseEvent
+	EventID string `json:"event_id"`
 	Session struct {
-		SessionID         string   `json:"session_id"`
-		Model             string   `json:"model"`
-		Voice             string   `json:"voice,omitempty"`
-		InputAudioFormat  string   `json:"input_audio_format,omitempty"`
-		OutputAudioFormat string   `json:"output_audio_format,omitempty"`
-		Modalities        []string `json:"modalities,omitempty"`
-		TurnDetection     struct {
-			Type string `json:"type"` // "server_vad" or "disabled"
-		} `json:"turn_detection,omitempty"`
-		Instructions string   `json:"instructions,omitempty"`
-		Temperature  *float64 `json:"temperature,omitempty"`
+		ID            string   `json:"id"`
+		Object        string   `json:"object"` // "realtime.session"
+		Model         string   `json:"model"`
+		ExpiresAt     int64    `json:"expires_at"`
+		Modalities    []string `json:"modalities"`
+		Instructions  string   `json:"instructions"`
+		Voice         string   `json:"voice"`
+		TurnDetection struct {
+			Type              string  `json:"type"` // "server_vad" or "disabled"
+			Threshold         float64 `json:"threshold,omitempty"`
+			PrefixPaddingMs   int     `json:"prefix_padding_ms,omitempty"`
+			SilenceDurationMs int     `json:"silence_duration_ms,omitempty"`
+			CreateResponse    bool    `json:"create_response,omitempty"`
+			InterruptResponse bool    `json:"interrupt_response,omitempty"`
+		} `json:"turn_detection"`
+		InputAudioFormat        string        `json:"input_audio_format"`
+		OutputAudioFormat       string        `json:"output_audio_format"`
+		InputAudioTranscription interface{}   `json:"input_audio_transcription"`
+		ToolChoice              string        `json:"tool_choice"`
+		Temperature             float64       `json:"temperature"`
+		MaxResponseOutputTokens string        `json:"max_response_output_tokens"`
+		ClientSecret            interface{}   `json:"client_secret"`
+		Tools                   []interface{} `json:"tools"`
 	} `json:"session"`
 }
 
@@ -172,8 +185,14 @@ type ResponseDoneEvent struct {
 // ErrorEvent represents the error event
 type ErrorEvent struct {
 	*BaseEvent
-	Message string `json:"message"`
-	Code    string `json:"code,omitempty"`
+	EventID string `json:"event_id"`
+	Error   struct {
+		Type    string      `json:"type"`
+		Code    string      `json:"code"`
+		Message string      `json:"message"`
+		Param   string      `json:"param,omitempty"`
+		EventID interface{} `json:"event_id"`
+	} `json:"error"`
 }
 
 // Client-to-server event types
@@ -222,8 +241,29 @@ type ConversationItemCreateRequest struct {
 	} `json:"item"`
 }
 
-// InputTextRequest represents the input_text request
-type InputTextRequest struct {
-	Type string `json:"type"` // "input_text"
-	Text string `json:"text"` // The text message
+// AudioBufferClearRequest represents the input_audio_buffer.clear message
+type AudioBufferClearRequest struct {
+	Type string `json:"type"` // "input_audio_buffer.clear"
+}
+
+// ConversationItemTruncateRequest represents the conversation.item.truncate message
+type ConversationItemTruncateRequest struct {
+	Type   string `json:"type"`    // "conversation.item.truncate"
+	ItemID string `json:"item_id"` // ID of the item to truncate from
+}
+
+// ConversationItemDeleteRequest represents the conversation.item.delete message
+type ConversationItemDeleteRequest struct {
+	Type   string `json:"type"`    // "conversation.item.delete"
+	ItemID string `json:"item_id"` // ID of the item to delete
+}
+
+// ResponseCreateRequest represents the response.create message
+type ResponseCreateRequest struct {
+	Type string `json:"type"` // "response.create"
+}
+
+// ResponseCancelRequest represents the response.cancel message
+type ResponseCancelRequest struct {
+	Type string `json:"type"` // "response.cancel"
 }

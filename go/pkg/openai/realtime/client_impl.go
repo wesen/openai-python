@@ -319,10 +319,15 @@ func (c *clientImpl) SendText(ctx context.Context, text string) error {
 		return errors.New("client is not connected")
 	}
 
-	// Create the message
+	// Create the message using conversation.item.create instead of input_text
 	msg := map[string]interface{}{
-		"type": "input_text",
-		"text": text,
+		"type": "conversation.item.create",
+		"item": map[string]interface{}{
+			"role": "user",
+			"content": map[string]interface{}{
+				"text": text,
+			},
+		},
 	}
 
 	// Send through the message sender
@@ -493,9 +498,9 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 				}
 
 				// Store session ID
-				cm.client.sessionID.Store(sessionEvent.Session.SessionID)
+				cm.client.sessionID.Store(sessionEvent.Session.ID)
 				cm.logger.Info().
-					Str("session_id", sessionEvent.Session.SessionID).
+					Str("session_id", sessionEvent.Session.ID).
 					Str("model", sessionEvent.Session.Model).
 					Str("voice", sessionEvent.Session.Voice).
 					Msg("Session created")
@@ -911,6 +916,7 @@ func (ep *eventProcessor) processEvent(event Event) error {
 
 	ep.logger.Debug().
 		Str("event_type", eventType).
+		Str("event", string(event.RawData())).
 		Msg("Processing event")
 
 	// Find handlers for this event type
@@ -946,7 +952,7 @@ func (ep *eventProcessor) handleDefaultEvent(event Event) error {
 	switch event.Type() {
 	case EventSessionCreated:
 		if e, ok := event.(*SessionCreatedEvent); ok {
-			ep.client.sessionID.Store(e.Session.SessionID)
+			ep.client.sessionID.Store(e.Session.ID)
 		}
 
 	case EventResponseDone:
@@ -965,8 +971,10 @@ func (ep *eventProcessor) handleDefaultEvent(event Event) error {
 	case EventError:
 		if e, ok := event.(*ErrorEvent); ok {
 			ep.logger.Error().
-				Str("code", e.Code).
-				Str("message", e.Message).
+				Str("type", e.Error.Type).
+				Str("code", e.Error.Code).
+				Str("message", e.Error.Message).
+				Str("param", e.Error.Param).
 				Msg("Received error event from API")
 		}
 	}

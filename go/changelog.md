@@ -88,4 +88,22 @@ Completely refactored the OpenAI Realtime client implementation to provide a mor
 - Added proper separation between connection and message handling
 - Improved event processing with cleaner handler registration
 - Enhanced response management with thread-safe operations
-- Implemented comprehensive context cancellation propagation 
+- Implemented comprehensive context cancellation propagation
+
+## Updated Client Implementation to Match Latest OpenAI Realtime API Specification
+
+Updated the client implementation to align with the latest OpenAI Realtime API specification, fixing compatibility issues:
+
+- Fixed the text input method to use `conversation.item.create` instead of the unsupported `input_text` event type
+- Updated error event structure to match the actual API response format with nested error object
+- Updated session created event structure to match the actual API response format with detailed fields
+- Added support for additional event types: `input_audio_buffer.clear`, `conversation.item.truncate`, `conversation.item.delete`, `response.create`, and `response.cancel`
+- Updated session ID handling to use the correct field path in the API response
+
+### Changes
+
+- Updated `SendText` method to use the correct event type
+- Revised event structs to match actual API response formats
+- Added missing client-to-server event types
+- Fixed error handling to correctly process error messages from the API
+- Updated session creation handling to use the proper session ID field 
