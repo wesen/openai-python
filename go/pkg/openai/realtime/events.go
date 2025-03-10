@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"encoding/base64"
 	"encoding/json"
 )
 
@@ -73,126 +74,173 @@ func NewBaseEvent(eventType string, rawData []byte) *BaseEvent {
 	}
 }
 
+// TurnDetectionConfig represents turn detection configuration
+type TurnDetectionConfig struct {
+	Type              string  `json:"type,omitempty"` // "server_vad" or "disabled"
+	Threshold         float64 `json:"threshold,omitempty"`
+	PrefixPaddingMs   int     `json:"prefix_padding_ms,omitempty"`
+	SilenceDurationMs int     `json:"silence_duration_ms,omitempty"`
+	CreateResponse    bool    `json:"create_response,omitempty"`
+	InterruptResponse bool    `json:"interrupt_response,omitempty"`
+}
+
+// InputAudioTranscriptionConfig represents input audio transcription configuration
+type InputAudioTranscriptionConfig struct {
+	Language          string                 `json:"language,omitempty"`
+	Type              string                 `json:"type,omitempty"` // "server" or "client"
+	Interim           bool                   `json:"interim,omitempty"`
+	PhraseHints       []string               `json:"phrase_hints,omitempty"`
+	ProfanityFilter   bool                   `json:"profanity_filter,omitempty"`
+	Redact            []string               `json:"redact,omitempty"`
+	Diarize           bool                   `json:"diarize,omitempty"`
+	EndpointingConfig map[string]interface{} `json:"endpointing_config,omitempty"`
+}
+
+// SpeechSettings represents speech configuration
+type SpeechSettings struct {
+	Voice        string  `json:"voice,omitempty"`
+	Speed        float64 `json:"speed,omitempty"`
+	Stability    float64 `json:"stability,omitempty"`
+	Similarity   float64 `json:"similarity,omitempty"`
+	Style        float64 `json:"style,omitempty"`
+	PresenceText bool    `json:"presence_text,omitempty"`
+}
+
+// UsageDetails represents token usage statistics
+type UsageDetails struct {
+	TotalTokens       int `json:"total_tokens"`
+	InputTokens       int `json:"input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	InputTokenDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+		TextTokens   int `json:"text_tokens"`
+		AudioTokens  int `json:"audio_tokens"`
+	} `json:"input_token_details"`
+	OutputTokenDetails struct {
+		TextTokens  int `json:"text_tokens"`
+		AudioTokens int `json:"audio_tokens"`
+	} `json:"output_token_details"`
+}
+
+// OutputItem represents an output item in a response
+type OutputItem struct {
+	ID     string `json:"id"`
+	Object string `json:"object"`
+	Type   string `json:"type"`
+}
+
+// StatusDetails represents status details in a response
+type StatusDetails struct {
+	Type string `json:"type"`
+}
+
+// ContentPart represents a content part in a response
+type ContentPart struct {
+	Type string `json:"type"` // "text", "audio", etc.
+	Text string `json:"text,omitempty"`
+}
+
+// FunctionCallInfo represents information about a function call
+type FunctionCallInfo struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"` // JSON string of arguments
+}
+
+// FunctionResultInfo represents information about a function result
+type FunctionResultInfo struct {
+	Name   string          `json:"name"`
+	Result json.RawMessage `json:"result"` // JSON result data
+}
+
+// ItemContent represents the content of a conversation item
+type ItemContent struct {
+	Text           string              `json:"text,omitempty"`
+	FunctionCall   *FunctionCallInfo   `json:"function_call,omitempty"`
+	FunctionResult *FunctionResultInfo `json:"function_result,omitempty"`
+}
+
+// ConversationItem represents a conversation item
+type ConversationItem struct {
+	ID       string                 `json:"id,omitempty"`
+	Role     string                 `json:"role"` // "user", "assistant", or "function"
+	Type     string                 `json:"type"` // "text" for text messages
+	Content  ItemContent            `json:"content"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// SessionErrorInfo represents error information
+type SessionErrorInfo struct {
+	Type    string      `json:"type"`
+	Code    string      `json:"code"`
+	Message string      `json:"message"`
+	Param   string      `json:"param,omitempty"`
+	EventID interface{} `json:"event_id"`
+}
+
+// SessionInfo represents the realtime session information
+type SessionInfo struct {
+	ID                      string                        `json:"id"`
+	Object                  string                        `json:"object,omitempty"` // "realtime.session"
+	Model                   string                        `json:"model,omitempty"`
+	Modalities              []string                      `json:"modalities,omitempty"`
+	Instructions            string                        `json:"instructions,omitempty"`
+	Voice                   string                        `json:"voice,omitempty"`
+	TurnDetection           TurnDetectionConfig           `json:"turn_detection"`
+	InputAudioFormat        string                        `json:"input_audio_format,omitempty"`
+	OutputAudioFormat       string                        `json:"output_audio_format,omitempty"`
+	InputAudioTranscription InputAudioTranscriptionConfig `json:"input_audio_transcription,omitempty"`
+	ToolChoice              string                        `json:"tool_choice,omitempty"`
+	Temperature             float64                       `json:"temperature,omitempty"`
+	TopP                    float64                       `json:"top_p,omitempty"`
+	PresencePenalty         float64                       `json:"presence_penalty,omitempty"`
+	FrequencyPenalty        float64                       `json:"frequency_penalty,omitempty"`
+	MaxResponseOutputTokens int                           `json:"max_response_output_tokens,omitempty"`
+	ClientSecret            interface{}                   `json:"client_secret,omitempty"`
+	Tools                   []interface{}                 `json:"tools,omitempty"`
+	SpeechSettings          SpeechSettings                `json:"speech_settings,omitempty"`
+}
+
+// ResponseInfo represents response information
+type ResponseInfo struct {
+	Object        string         `json:"object"`
+	ID            string         `json:"id"`
+	Status        string         `json:"status"`
+	StatusDetails *StatusDetails `json:"status_details,omitempty"`
+	Output        []OutputItem   `json:"output"`
+	Usage         UsageDetails   `json:"usage"`
+}
+
+// ConversationInfo represents conversation information
+type ConversationInfo struct {
+	ID     string `json:"id"`
+	Object string `json:"object"`
+}
+
+// TranscriptionErrorInfo represents error information for input audio transcription
+type TranscriptionErrorInfo struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // SessionCreatedEvent represents the session.created event
 type SessionCreatedEvent struct {
 	*BaseEvent
-	EventID string `json:"event_id"`
-	Session struct {
-		ID            string   `json:"id"`
-		Object        string   `json:"object"` // "realtime.session"
-		Model         string   `json:"model"`
-		Modalities    []string `json:"modalities"`
-		Instructions  string   `json:"instructions"`
-		Voice         string   `json:"voice"`
-		TurnDetection struct {
-			Type              string  `json:"type"` // "server_vad" or "disabled"
-			Threshold         float64 `json:"threshold,omitempty"`
-			PrefixPaddingMs   int     `json:"prefix_padding_ms,omitempty"`
-			SilenceDurationMs int     `json:"silence_duration_ms,omitempty"`
-			CreateResponse    bool    `json:"create_response,omitempty"`
-			InterruptResponse bool    `json:"interrupt_response,omitempty"`
-		} `json:"turn_detection"`
-		InputAudioFormat        string `json:"input_audio_format"`
-		OutputAudioFormat       string `json:"output_audio_format"`
-		InputAudioTranscription struct {
-			Language          string                 `json:"language,omitempty"`
-			Type              string                 `json:"type,omitempty"` // "server" or "client"
-			Interim           bool                   `json:"interim,omitempty"`
-			PhraseHints       []string               `json:"phrase_hints,omitempty"`
-			ProfanityFilter   bool                   `json:"profanity_filter,omitempty"`
-			Redact            []string               `json:"redact,omitempty"`
-			Diarize           bool                   `json:"diarize,omitempty"`
-			EndpointingConfig map[string]interface{} `json:"endpointing_config,omitempty"`
-		} `json:"input_audio_transcription"`
-		ToolChoice              string        `json:"tool_choice"`
-		Temperature             float64       `json:"temperature"`
-		TopP                    float64       `json:"top_p,omitempty"`
-		PresencePenalty         float64       `json:"presence_penalty,omitempty"`
-		FrequencyPenalty        float64       `json:"frequency_penalty,omitempty"`
-		MaxResponseOutputTokens int           `json:"max_response_output_tokens"`
-		ClientSecret            interface{}   `json:"client_secret"`
-		Tools                   []interface{} `json:"tools"`
-		SpeechSettings          struct {
-			Voice        string  `json:"voice"`
-			Speed        float64 `json:"speed,omitempty"`
-			Stability    float64 `json:"stability,omitempty"`
-			Similarity   float64 `json:"similarity,omitempty"`
-			Style        float64 `json:"style,omitempty"`
-			PresenceText bool    `json:"presence_text,omitempty"`
-		} `json:"speech_settings,omitempty"`
-	} `json:"session"`
+	EventID string      `json:"event_id"`
+	Session SessionInfo `json:"session"`
 }
 
 // SessionUpdatedEvent represents the session.updated event
 type SessionUpdatedEvent struct {
 	*BaseEvent
-	Session struct {
-		ID                string   `json:"id"`
-		Object            string   `json:"object,omitempty"` // "realtime.session"
-		Model             string   `json:"model,omitempty"`
-		Voice             string   `json:"voice,omitempty"`
-		InputAudioFormat  string   `json:"input_audio_format,omitempty"`
-		OutputAudioFormat string   `json:"output_audio_format,omitempty"`
-		Modalities        []string `json:"modalities,omitempty"`
-		TurnDetection     struct {
-			Type              string  `json:"type,omitempty"` // "server_vad" or "disabled"
-			Threshold         float64 `json:"threshold,omitempty"`
-			PrefixPaddingMs   int     `json:"prefix_padding_ms,omitempty"`
-			SilenceDurationMs int     `json:"silence_duration_ms,omitempty"`
-			CreateResponse    bool    `json:"create_response,omitempty"`
-			InterruptResponse bool    `json:"interrupt_response,omitempty"`
-		} `json:"turn_detection,omitempty"`
-		Instructions            string   `json:"instructions,omitempty"`
-		Temperature             *float64 `json:"temperature,omitempty"`
-		TopP                    *float64 `json:"top_p,omitempty"`
-		PresencePenalty         *float64 `json:"presence_penalty,omitempty"`
-		FrequencyPenalty        *float64 `json:"frequency_penalty,omitempty"`
-		MaxResponseOutputTokens *int     `json:"max_response_output_tokens,omitempty"`
-		InputAudioTranscription struct {
-			Language        string   `json:"language,omitempty"`
-			Type            string   `json:"type,omitempty"`
-			Interim         bool     `json:"interim,omitempty"`
-			PhraseHints     []string `json:"phrase_hints,omitempty"`
-			ProfanityFilter bool     `json:"profanity_filter,omitempty"`
-			Redact          []string `json:"redact,omitempty"`
-			Diarize         bool     `json:"diarize,omitempty"`
-		} `json:"input_audio_transcription,omitempty"`
-		SpeechSettings struct {
-			Voice        string  `json:"voice,omitempty"`
-			Speed        float64 `json:"speed,omitempty"`
-			Stability    float64 `json:"stability,omitempty"`
-			Similarity   float64 `json:"similarity,omitempty"`
-			Style        float64 `json:"style,omitempty"`
-			PresenceText bool    `json:"presence_text,omitempty"`
-		} `json:"speech_settings,omitempty"`
-		Tools      []interface{} `json:"tools,omitempty"`
-		ToolChoice string        `json:"tool_choice,omitempty"`
-	} `json:"session"`
+	Session SessionInfo `json:"session"`
 }
 
 // ConversationItemCreatedEvent represents the conversation.item.created event
 type ConversationItemCreatedEvent struct {
 	*BaseEvent
-	PreviousItemID string `json:"previous_item_id,omitempty"`
-	Item struct {
-		ID      string `json:"id"`
-		Role    string `json:"role"` // "user", "assistant", or "function"
-		Type    string `json:"type"` // "text" for text messages
-		Content struct {
-			Text string `json:"text,omitempty"`
-			// Can include function_call for assistant role
-			FunctionCall *struct {
-				Name      string          `json:"name"`
-				Arguments json.RawMessage `json:"arguments"` // JSON string of arguments
-			} `json:"function_call,omitempty"`
-			// For function results when role is "function"
-			FunctionResult *struct {
-				Name   string          `json:"name"`
-				Result json.RawMessage `json:"result"` // JSON result data
-			} `json:"function_result,omitempty"`
-		} `json:"content"`
-		Metadata map[string]interface{} `json:"metadata,omitempty"`
-	} `json:"item"`
+	PreviousItemID string           `json:"previous_item_id,omitempty"`
+	Item           ConversationItem `json:"item"`
 }
 
 // TranscriptionCompletedEvent represents the conversation.item.input_audio_transcription.completed event
@@ -206,59 +254,27 @@ type TranscriptionCompletedEvent struct {
 // ResponseCreatedEvent represents the response.created event
 type ResponseCreatedEvent struct {
 	*BaseEvent
-	Response struct {
-		Object        string `json:"object"`
-		ID            string `json:"id"`
-		Status        string `json:"status"`
-		StatusDetails *struct {
-			Type string `json:"type"`
-		} `json:"status_details,omitempty"`
-		Output []struct {
-			ID     string `json:"id"`
-			Object string `json:"object"`
-			Type   string `json:"type"`
-		} `json:"output"`
-		Usage struct {
-			TotalTokens       int `json:"total_tokens"`
-			InputTokens       int `json:"input_tokens"`
-			OutputTokens      int `json:"output_tokens"`
-			InputTokenDetails struct {
-				CachedTokens int `json:"cached_tokens"`
-				TextTokens   int `json:"text_tokens"`
-				AudioTokens  int `json:"audio_tokens"`
-			} `json:"input_token_details"`
-			OutputTokenDetails struct {
-				TextTokens  int `json:"text_tokens"`
-				AudioTokens int `json:"audio_tokens"`
-			} `json:"output_token_details"`
-		} `json:"usage"`
-	} `json:"response"`
+	Response ResponseInfo `json:"response"`
 }
 
 // ContentPartAddedEvent represents the response.content_part.added event
 type ContentPartAddedEvent struct {
 	*BaseEvent
-	ResponseID   string `json:"response_id"`
-	ItemID       string `json:"item_id"`
-	OutputIndex  int    `json:"output_index"`
-	ContentIndex int    `json:"content_index"`
-	Part         struct {
-		Type string `json:"type"` // "text", "audio", etc.
-		Text string `json:"text,omitempty"`
-	} `json:"part"`
+	ResponseID   string      `json:"response_id"`
+	ItemID       string      `json:"item_id"`
+	OutputIndex  int         `json:"output_index"`
+	ContentIndex int         `json:"content_index"`
+	Part         ContentPart `json:"part"`
 }
 
 // ContentPartDoneEvent represents the response.content_part.done event
 type ContentPartDoneEvent struct {
 	*BaseEvent
-	ResponseID   string `json:"response_id"`
-	ItemID       string `json:"item_id"`
-	OutputIndex  int    `json:"output_index"`
-	ContentIndex int    `json:"content_index"`
-	Part         struct {
-		Type string `json:"type"` // "text", "audio", etc.
-		Text string `json:"text,omitempty"`
-	} `json:"part"`
+	ResponseID   string      `json:"response_id"`
+	ItemID       string      `json:"item_id"`
+	OutputIndex  int         `json:"output_index"`
+	ContentIndex int         `json:"content_index"`
+	Part         ContentPart `json:"part"`
 }
 
 // AudioDeltaEvent represents the response.audio.delta event
@@ -283,55 +299,20 @@ type AudioDoneEvent struct {
 // ResponseDoneEvent represents the response.done event
 type ResponseDoneEvent struct {
 	*BaseEvent
-	Response struct {
-		Object        string `json:"object"`
-		ID            string `json:"id"`
-		Status        string `json:"status"`
-		StatusDetails *struct {
-			Type string `json:"type"`
-		} `json:"status_details,omitempty"`
-		Output []struct {
-			ID     string `json:"id"`
-			Object string `json:"object"`
-			Type   string `json:"type"`
-		} `json:"output"`
-		Usage struct {
-			TotalTokens       int `json:"total_tokens"`
-			InputTokens       int `json:"input_tokens"`
-			OutputTokens      int `json:"output_tokens"`
-			InputTokenDetails struct {
-				CachedTokens int `json:"cached_tokens"`
-				TextTokens   int `json:"text_tokens"`
-				AudioTokens  int `json:"audio_tokens"`
-			} `json:"input_token_details"`
-			OutputTokenDetails struct {
-				TextTokens  int `json:"text_tokens"`
-				AudioTokens int `json:"audio_tokens"`
-			} `json:"output_token_details"`
-		} `json:"usage"`
-	} `json:"response"`
+	Response ResponseInfo `json:"response"`
 }
 
 // ErrorEvent represents the error event
 type ErrorEvent struct {
 	*BaseEvent
-	EventID string `json:"event_id"`
-	Error   struct {
-		Type    string      `json:"type"`
-		Code    string      `json:"code"`
-		Message string      `json:"message"`
-		Param   string      `json:"param,omitempty"`
-		EventID interface{} `json:"event_id"`
-	} `json:"error"`
+	EventID string           `json:"event_id"`
+	Error   SessionErrorInfo `json:"error"`
 }
 
 // ConversationCreatedEvent represents the conversation.created event
 type ConversationCreatedEvent struct {
 	*BaseEvent
-	Conversation struct {
-		ID     string `json:"id"`
-		Object string `json:"object"`
-	} `json:"conversation"`
+	Conversation ConversationInfo `json:"conversation"`
 }
 
 // ConversationItemDeletedEvent represents the conversation.item.deleted event
@@ -348,39 +329,34 @@ type ConversationItemTruncatedEvent struct {
 	AudioEndMs   int    `json:"audio_end_ms"`
 }
 
+// RateLimit represents a rate limit entry
+type RateLimit struct {
+	Name         string `json:"name"`
+	Limit        int    `json:"limit"`
+	Remaining    int    `json:"remaining"`
+	ResetSeconds int    `json:"reset_seconds"`
+}
+
 // RateLimitsUpdatedEvent represents the rate_limits.updated event
 type RateLimitsUpdatedEvent struct {
 	*BaseEvent
-	RateLimits []struct {
-		Name         string `json:"name"`
-		Limit        int    `json:"limit"`
-		Remaining    int    `json:"remaining"`
-		ResetSeconds int    `json:"reset_seconds"`
-	} `json:"rate_limits"`
+	RateLimits []RateLimit `json:"rate_limits"`
 }
 
 // ResponseOutputItemAddedEvent represents the response.output_item.added event
 type ResponseOutputItemAddedEvent struct {
 	*BaseEvent
-	ResponseID  string `json:"response_id"`
-	OutputIndex int    `json:"output_index"`
-	Item        struct {
-		ID     string `json:"id"`
-		Object string `json:"object"`
-		Type   string `json:"type"`
-	} `json:"item"`
+	ResponseID  string     `json:"response_id"`
+	OutputIndex int        `json:"output_index"`
+	Item        OutputItem `json:"item"`
 }
 
 // ResponseOutputItemDoneEvent represents the response.output_item.done event
 type ResponseOutputItemDoneEvent struct {
 	*BaseEvent
-	ResponseID  string `json:"response_id"`
-	OutputIndex int    `json:"output_index"`
-	Item        struct {
-		ID     string `json:"id"`
-		Object string `json:"object"`
-		Type   string `json:"type"`
-	} `json:"item"`
+	ResponseID  string     `json:"response_id"`
+	OutputIndex int        `json:"output_index"`
+	Item        OutputItem `json:"item"`
 }
 
 // ResponseAudioTranscriptDeltaEvent represents the response.audio_transcript.delta event
@@ -472,60 +448,37 @@ type InputAudioBufferClearedEvent struct {
 // ConversationItemInputAudioTranscriptionFailedEvent represents the conversation.item.input_audio_transcription.failed event
 type ConversationItemInputAudioTranscriptionFailedEvent struct {
 	*BaseEvent
-	ItemID       string `json:"item_id"`
-	ContentIndex int    `json:"content_index"`
-	Error        struct {
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
+	ItemID       string                 `json:"item_id"`
+	ContentIndex int                    `json:"content_index"`
+	Error        TranscriptionErrorInfo `json:"error"`
 }
 
 // Client-to-server event types
 // These are used for constructing messages to send to the OpenAI API
 
+// SessionConfig holds configuration for session update
+type SessionConfig struct {
+	Voice                   string                         `json:"voice,omitempty"`
+	Modalities              []string                       `json:"modalities,omitempty"`
+	InputAudioFormat        string                         `json:"input_audio_format,omitempty"`
+	OutputAudioFormat       string                         `json:"output_audio_format,omitempty"`
+	Instructions            string                         `json:"instructions,omitempty"`
+	Temperature             *float64                       `json:"temperature,omitempty"`
+	TurnDetection           *TurnDetectionConfig           `json:"turn_detection,omitempty"`
+	TopP                    *float64                       `json:"top_p,omitempty"`
+	PresencePenalty         *float64                       `json:"presence_penalty,omitempty"`
+	FrequencyPenalty        *float64                       `json:"frequency_penalty,omitempty"`
+	MaxResponseOutputTokens *int                           `json:"max_response_output_tokens,omitempty"`
+	InputAudioTranscription *InputAudioTranscriptionConfig `json:"input_audio_transcription,omitempty"`
+	SpeechSettings          *SpeechSettings                `json:"speech_settings,omitempty"`
+	Tools                   []interface{}                  `json:"tools,omitempty"`
+	ToolChoice              string                         `json:"tool_choice,omitempty"`
+}
+
 // SessionUpdateRequest represents the session.update request
 type SessionUpdateRequest struct {
-	Type    string `json:"type"` // "session.update"
-	Session struct {
-		Voice             string   `json:"voice,omitempty"`
-		Modalities        []string `json:"modalities,omitempty"`
-		InputAudioFormat  string   `json:"input_audio_format,omitempty"`
-		OutputAudioFormat string   `json:"output_audio_format,omitempty"`
-		Instructions      string   `json:"instructions,omitempty"`
-		Temperature       *float64 `json:"temperature,omitempty"`
-		TurnDetection     *struct {
-			Type              string  `json:"type,omitempty"` // "server_vad" or "disabled"
-			Threshold         float64 `json:"threshold,omitempty"`
-			PrefixPaddingMs   int     `json:"prefix_padding_ms,omitempty"`
-			SilenceDurationMs int     `json:"silence_duration_ms,omitempty"`
-			CreateResponse    bool    `json:"create_response,omitempty"`
-			InterruptResponse bool    `json:"interrupt_response,omitempty"`
-		} `json:"turn_detection,omitempty"`
-		TopP                    *float64 `json:"top_p,omitempty"`
-		PresencePenalty         *float64 `json:"presence_penalty,omitempty"`
-		FrequencyPenalty        *float64 `json:"frequency_penalty,omitempty"`
-		MaxResponseOutputTokens *int     `json:"max_response_output_tokens,omitempty"`
-		InputAudioTranscription *struct {
-			Language        string   `json:"language,omitempty"`
-			Type            string   `json:"type,omitempty"`
-			Interim         bool     `json:"interim,omitempty"`
-			PhraseHints     []string `json:"phrase_hints,omitempty"`
-			ProfanityFilter bool     `json:"profanity_filter,omitempty"`
-			Redact          []string `json:"redact,omitempty"`
-			Diarize         bool     `json:"diarize,omitempty"`
-		} `json:"input_audio_transcription,omitempty"`
-		SpeechSettings *struct {
-			Voice        string  `json:"voice,omitempty"`
-			Speed        float64 `json:"speed,omitempty"`
-			Stability    float64 `json:"stability,omitempty"`
-			Similarity   float64 `json:"similarity,omitempty"`
-			Style        float64 `json:"style,omitempty"`
-			PresenceText bool    `json:"presence_text,omitempty"`
-		} `json:"speech_settings,omitempty"`
-		Tools      []interface{} `json:"tools,omitempty"`
-		ToolChoice string        `json:"tool_choice,omitempty"`
-	} `json:"session"`
+	Type    string        `json:"type"` // "session.update"
+	Session SessionConfig `json:"session"`
 }
 
 // AudioBufferAppendRequest represents the input_audio_buffer.append request
@@ -541,21 +494,9 @@ type AudioBufferCommitRequest struct {
 
 // ConversationItemCreateRequest represents the conversation.item.create request
 type ConversationItemCreateRequest struct {
-	Type           string `json:"type"` // "conversation.item.create"
-	PreviousItemID string `json:"previous_item_id,omitempty"`
-	Item           struct {
-		Role    string `json:"role"` // "user" or "function"
-		Type    string `json:"type"` // "text"
-		Content struct {
-			Text string `json:"text,omitempty"` // For user messages
-			// For function results when role is "function"
-			FunctionResult *struct {
-				Name   string          `json:"name"`
-				Result json.RawMessage `json:"result"` // JSON result data
-			} `json:"function_result,omitempty"`
-		} `json:"content"`
-		Metadata map[string]interface{} `json:"metadata,omitempty"`
-	} `json:"item"`
+	Type           string           `json:"type"` // "conversation.item.create"
+	PreviousItemID string           `json:"previous_item_id,omitempty"`
+	Item           ConversationItem `json:"item"`
 }
 
 // AudioBufferClearRequest represents the input_audio_buffer.clear message
@@ -577,25 +518,33 @@ type ConversationItemDeleteRequest struct {
 	ItemID string `json:"item_id"` // ID of the item to delete
 }
 
+// ResponseConfig holds configuration for response creation
+type ResponseConfig struct {
+	Modalities              []string          `json:"modalities,omitempty"`
+	Instructions            string            `json:"instructions,omitempty"`
+	Voice                   string            `json:"voice,omitempty"`
+	OutputAudioFormat       string            `json:"output_audio_format,omitempty"`
+	Tools                   []interface{}     `json:"tools,omitempty"`
+	ToolChoice              string            `json:"tool_choice,omitempty"`
+	Temperature             *float64          `json:"temperature,omitempty"`
+	MaxResponseOutputTokens interface{}       `json:"max_response_output_tokens,omitempty"` // can be number or "inf"
+	Conversation            string            `json:"conversation,omitempty"`               // "auto" or "none"
+	Metadata                map[string]string `json:"metadata,omitempty"`
+	Input                   []interface{}     `json:"input,omitempty"`
+}
+
 // ResponseCreateRequest represents the response.create message
 type ResponseCreateRequest struct {
-	Type     string `json:"type"` // "response.create"
-	Response *struct {
-		Modalities              []string          `json:"modalities,omitempty"`
-		Instructions            string            `json:"instructions,omitempty"`
-		Voice                   string            `json:"voice,omitempty"`
-		OutputAudioFormat       string            `json:"output_audio_format,omitempty"`
-		Tools                   []interface{}     `json:"tools,omitempty"`
-		ToolChoice              string            `json:"tool_choice,omitempty"`
-		Temperature             *float64          `json:"temperature,omitempty"`
-		MaxResponseOutputTokens interface{}       `json:"max_response_output_tokens,omitempty"` // can be number or "inf"
-		Conversation            string            `json:"conversation,omitempty"`               // "auto" or "none"
-		Metadata                map[string]string `json:"metadata,omitempty"`
-		Input                   []interface{}     `json:"input,omitempty"`
-	} `json:"response,omitempty"`
+	Type     string          `json:"type"` // "response.create"
+	Response *ResponseConfig `json:"response,omitempty"`
 }
 
 // ResponseCancelRequest represents the response.cancel message
 type ResponseCancelRequest struct {
 	Type string `json:"type"` // "response.cancel"
+}
+
+// Helper function to encode audio data in base64
+func EncodeBase64(data []byte) string {
+	return "base64:" + base64.StdEncoding.EncodeToString(data)
 }
