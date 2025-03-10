@@ -41,12 +41,12 @@ type Client interface {
 type Config struct {
 	APIKey        string
 	Model         string
-	Voice         string
+	Voice         Voice
 	Modalities    []string
-	InputFormat   string
-	OutputFormat  string
+	InputFormat   AudioFormat
+	OutputFormat  AudioFormat
 	Instructions  string
-	TurnDetection string
+	TurnDetection TurnDetectionType
 	Temperature   *float64
 	Logger        *zerolog.Logger // Optional logger for the client
 	LogLevel      zerolog.Level   // Optional log level (debug, info, warn, error)
@@ -55,12 +55,13 @@ type Config struct {
 	TopP                    *float64
 	PresencePenalty         *float64
 	FrequencyPenalty        *float64
-	MaxResponseOutputTokens *int
+	MaxResponseOutputTokens interface{} // can be number or "inf"
 
 	// Input audio transcription configuration
 	InputAudioTranscription *struct {
 		Language        string
 		Type            string // "server" or "client"
+		Model           AudioInputTranscriptionModel
 		Interim         bool
 		PhraseHints     []string
 		ProfanityFilter bool
@@ -79,7 +80,7 @@ type Config struct {
 
 	// Function calling options
 	Tools      []interface{}
-	ToolChoice string
+	ToolChoice ToolChoiceLiteral
 }
 
 // Event represents a message from the API

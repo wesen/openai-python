@@ -6,48 +6,49 @@ import (
 )
 
 // Event type constants
+// These are kept for backward compatibility but can be replaced with enum values
 const (
 	// Server-to-client events
-	EventSessionCreated                                   = "session.created"
-	EventSessionUpdated                                   = "session.updated"
-	EventConversationCreated                              = "conversation.created"
-	EventConversationItemCreated                          = "conversation.item.created"
-	EventConversationItemDeleted                          = "conversation.item.deleted"
-	EventConversationItemTruncated                        = "conversation.item.truncated"
-	EventResponseCreated                                  = "response.created"
-	EventResponseDone                                     = "response.done"
-	EventRateLimitsUpdated                                = "rate_limits.updated"
-	EventResponseOutputItemAdded                          = "response.output_item.added"
-	EventResponseOutputItemDone                           = "response.output_item.done"
-	EventResponseContentPartAdded                         = "response.content_part.added"
-	EventResponseContentPartDone                          = "response.content_part.done"
-	EventResponseAudioDelta                               = "response.audio.delta"
-	EventResponseAudioDone                                = "response.audio.done"
-	EventResponseAudioTranscriptDelta                     = "response.audio_transcript.delta"
-	EventResponseAudioTranscriptDone                      = "response.audio_transcript.done"
-	EventResponseTextDelta                                = "response.text.delta"
-	EventResponseTextDone                                 = "response.text.done"
-	EventResponseFunctionCallArgumentsDelta               = "response.function_call_arguments.delta"
-	EventResponseFunctionCallArgumentsDone                = "response.function_call_arguments.done"
-	EventInputAudioBufferSpeechStarted                    = "input_audio_buffer.speech_started"
-	EventInputAudioBufferSpeechStopped                    = "input_audio_buffer.speech_stopped"
-	EventConversationItemInputAudioTranscriptionCompleted = "conversation.item.input_audio_transcription.completed"
-	EventConversationItemInputAudioTranscriptionFailed    = "conversation.item.input_audio_transcription.failed"
-	EventInputAudioBufferCommitted                        = "input_audio_buffer.committed"
-	EventInputAudioBufferCleared                          = "input_audio_buffer.cleared"
-	EventError                                            = "error"
+	EventSessionCreated                                   = string(ServerEventTypeSessionCreated)
+	EventSessionUpdated                                   = string(ServerEventTypeSessionUpdated)
+	EventConversationCreated                              = string(ServerEventTypeConversationCreated)
+	EventConversationItemCreated                          = string(ServerEventTypeConversationItemCreated)
+	EventConversationItemDeleted                          = string(ServerEventTypeConversationItemDeleted)
+	EventConversationItemTruncated                        = string(ServerEventTypeConversationItemTruncated)
+	EventResponseCreated                                  = string(ServerEventTypeResponseCreated)
+	EventResponseDone                                     = string(ServerEventTypeResponseDone)
+	EventRateLimitsUpdated                                = string(ServerEventTypeRateLimitsUpdated)
+	EventResponseOutputItemAdded                          = string(ServerEventTypeResponseOutputItemAdded)
+	EventResponseOutputItemDone                           = string(ServerEventTypeResponseOutputItemDone)
+	EventResponseContentPartAdded                         = string(ServerEventTypeResponseContentPartAdded)
+	EventResponseContentPartDone                          = string(ServerEventTypeResponseContentPartDone)
+	EventResponseAudioDelta                               = string(ServerEventTypeResponseAudioDelta)
+	EventResponseAudioDone                                = string(ServerEventTypeResponseAudioDone)
+	EventResponseAudioTranscriptDelta                     = string(ServerEventTypeResponseAudioTranscriptDelta)
+	EventResponseAudioTranscriptDone                      = string(ServerEventTypeResponseAudioTranscriptDone)
+	EventResponseTextDelta                                = string(ServerEventTypeResponseTextDelta)
+	EventResponseTextDone                                 = string(ServerEventTypeResponseTextDone)
+	EventResponseFunctionCallArgumentsDelta               = string(ServerEventTypeResponseFunctionCallArgumentsDelta)
+	EventResponseFunctionCallArgumentsDone                = string(ServerEventTypeResponseFunctionCallArgumentsDone)
+	EventInputAudioBufferSpeechStarted                    = string(ServerEventTypeInputAudioBufferSpeechStarted)
+	EventInputAudioBufferSpeechStopped                    = string(ServerEventTypeInputAudioBufferSpeechStopped)
+	EventConversationItemInputAudioTranscriptionCompleted = string(ServerEventTypeConversationItemInputAudioTranscriptionCompleted)
+	EventConversationItemInputAudioTranscriptionFailed    = string(ServerEventTypeConversationItemInputAudioTranscriptionFailed)
+	EventInputAudioBufferCommitted                        = string(ServerEventTypeInputAudioBufferCommitted)
+	EventInputAudioBufferCleared                          = string(ServerEventTypeInputAudioBufferCleared)
+	EventError                                            = string(ServerEventTypeError)
 
 	// Client-to-server events
-	EventSessionUpdate            = "session.update"
-	EventAudioBufferAppend        = "input_audio_buffer.append"
-	EventAudioBufferCommit        = "input_audio_buffer.commit"
-	EventAudioBufferClear         = "input_audio_buffer.clear"
-	EventConversationItemCreate   = "conversation.item.create"
-	EventConversationItemDelete   = "conversation.item.delete"
-	EventConversationItemTruncate = "conversation.item.truncate"
-	EventResponseCreate           = "response.create"
-	EventResponseCancel           = "response.cancel"
-	EventInputText                = "input_text"
+	EventSessionUpdate            = string(ClientEventTypeSessionUpdate)
+	EventAudioBufferAppend        = string(ClientEventTypeInputAudioBufferAppend)
+	EventAudioBufferCommit        = string(ClientEventTypeInputAudioBufferCommit)
+	EventAudioBufferClear         = string(ClientEventTypeInputAudioBufferClear)
+	EventConversationItemCreate   = string(ClientEventTypeConversationItemCreate)
+	EventConversationItemDelete   = string(ClientEventTypeConversationItemDelete)
+	EventConversationItemTruncate = string(ClientEventTypeConversationItemTruncate)
+	EventResponseCreate           = string(ClientEventTypeResponseCreate)
+	EventResponseCancel           = string(ClientEventTypeResponseCancel)
+	EventInputText                = string(ContentPartTypeInputText)
 )
 
 // BaseEvent implements the common properties for all events
@@ -76,29 +77,30 @@ func NewBaseEvent(eventType string, rawData []byte) *BaseEvent {
 
 // TurnDetectionConfig represents turn detection configuration
 type TurnDetectionConfig struct {
-	Type              string  `json:"type,omitempty"` // "server_vad" or "disabled"
-	Threshold         float64 `json:"threshold,omitempty"`
-	PrefixPaddingMs   int     `json:"prefix_padding_ms,omitempty"`
-	SilenceDurationMs int     `json:"silence_duration_ms,omitempty"`
-	CreateResponse    bool    `json:"create_response,omitempty"`
-	InterruptResponse bool    `json:"interrupt_response,omitempty"`
+	Type              TurnDetectionType `json:"type,omitempty"` // server_vad or disabled
+	Threshold         float64           `json:"threshold,omitempty"`
+	PrefixPaddingMs   int               `json:"prefix_padding_ms,omitempty"`
+	SilenceDurationMs int               `json:"silence_duration_ms,omitempty"`
+	CreateResponse    bool              `json:"create_response,omitempty"`
+	InterruptResponse bool              `json:"interrupt_response,omitempty"`
 }
 
 // InputAudioTranscriptionConfig represents input audio transcription configuration
 type InputAudioTranscriptionConfig struct {
-	Language          string                 `json:"language,omitempty"`
-	Type              string                 `json:"type,omitempty"` // "server" or "client"
-	Interim           bool                   `json:"interim,omitempty"`
-	PhraseHints       []string               `json:"phrase_hints,omitempty"`
-	ProfanityFilter   bool                   `json:"profanity_filter,omitempty"`
-	Redact            []string               `json:"redact,omitempty"`
-	Diarize           bool                   `json:"diarize,omitempty"`
-	EndpointingConfig map[string]interface{} `json:"endpointing_config,omitempty"`
+	Language          string                       `json:"language,omitempty"`
+	Type              string                       `json:"type,omitempty"` // "server" or "client"
+	Model             AudioInputTranscriptionModel `json:"model,omitempty"`
+	Interim           bool                         `json:"interim,omitempty"`
+	PhraseHints       []string                     `json:"phrase_hints,omitempty"`
+	ProfanityFilter   bool                         `json:"profanity_filter,omitempty"`
+	Redact            []string                     `json:"redact,omitempty"`
+	Diarize           bool                         `json:"diarize,omitempty"`
+	EndpointingConfig map[string]interface{}       `json:"endpointing_config,omitempty"`
 }
 
 // SpeechSettings represents speech configuration
 type SpeechSettings struct {
-	Voice        string  `json:"voice,omitempty"`
+	Voice        Voice   `json:"voice,omitempty"`
 	Speed        float64 `json:"speed,omitempty"`
 	Stability    float64 `json:"stability,omitempty"`
 	Similarity   float64 `json:"similarity,omitempty"`
@@ -124,20 +126,20 @@ type UsageDetails struct {
 
 // OutputItem represents an output item in a response
 type OutputItem struct {
-	ID     string `json:"id"`
-	Object string `json:"object"`
-	Type   string `json:"type"`
+	ID     string   `json:"id"`
+	Object string   `json:"object"`
+	Type   ItemType `json:"type"`
 }
 
 // StatusDetails represents status details in a response
 type StatusDetails struct {
-	Type string `json:"type"`
+	Type ResponseStatus `json:"type"`
 }
 
 // ContentPart represents a content part in a response
 type ContentPart struct {
-	Type string `json:"type"` // "text", "audio", etc.
-	Text string `json:"text,omitempty"`
+	Type ContentPartType `json:"type"` // text, audio, etc.
+	Text string          `json:"text,omitempty"`
 }
 
 // FunctionCallInfo represents information about a function call
@@ -162,8 +164,8 @@ type ItemContent struct {
 // ConversationItem represents a conversation item
 type ConversationItem struct {
 	ID       string                 `json:"id,omitempty"`
-	Role     string                 `json:"role"` // "user", "assistant", or "function"
-	Type     string                 `json:"type"` // "text" for text messages
+	Role     MessageRole            `json:"role"` // user, assistant, or system
+	Type     ItemType               `json:"type"` // message, function_call, etc.
 	Content  ItemContent            `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -184,17 +186,17 @@ type SessionInfo struct {
 	Model                   string                        `json:"model,omitempty"`
 	Modalities              []string                      `json:"modalities,omitempty"`
 	Instructions            string                        `json:"instructions,omitempty"`
-	Voice                   string                        `json:"voice,omitempty"`
+	Voice                   Voice                         `json:"voice,omitempty"`
 	TurnDetection           TurnDetectionConfig           `json:"turn_detection"`
-	InputAudioFormat        string                        `json:"input_audio_format,omitempty"`
-	OutputAudioFormat       string                        `json:"output_audio_format,omitempty"`
+	InputAudioFormat        AudioFormat                   `json:"input_audio_format,omitempty"`
+	OutputAudioFormat       AudioFormat                   `json:"output_audio_format,omitempty"`
 	InputAudioTranscription InputAudioTranscriptionConfig `json:"input_audio_transcription,omitempty"`
-	ToolChoice              string                        `json:"tool_choice,omitempty"`
+	ToolChoice              ToolChoiceLiteral             `json:"tool_choice,omitempty"`
 	Temperature             float64                       `json:"temperature,omitempty"`
 	TopP                    float64                       `json:"top_p,omitempty"`
 	PresencePenalty         float64                       `json:"presence_penalty,omitempty"`
 	FrequencyPenalty        float64                       `json:"frequency_penalty,omitempty"`
-	MaxResponseOutputTokens int                           `json:"max_response_output_tokens,omitempty"`
+	MaxResponseOutputTokens interface{}                   `json:"max_response_output_tokens,omitempty"`
 	ClientSecret            interface{}                   `json:"client_secret,omitempty"`
 	Tools                   []interface{}                 `json:"tools,omitempty"`
 	SpeechSettings          SpeechSettings                `json:"speech_settings,omitempty"`
@@ -204,7 +206,7 @@ type SessionInfo struct {
 type ResponseInfo struct {
 	Object        string         `json:"object"`
 	ID            string         `json:"id"`
-	Status        string         `json:"status"`
+	Status        ResponseStatus `json:"status"`
 	StatusDetails *StatusDetails `json:"status_details,omitempty"`
 	Output        []OutputItem   `json:"output"`
 	Usage         UsageDetails   `json:"usage"`
@@ -458,74 +460,74 @@ type ConversationItemInputAudioTranscriptionFailedEvent struct {
 
 // SessionConfig holds configuration for session update
 type SessionConfig struct {
-	Voice                   string                         `json:"voice,omitempty"`
+	Voice                   Voice                          `json:"voice,omitempty"`
 	Modalities              []string                       `json:"modalities,omitempty"`
-	InputAudioFormat        string                         `json:"input_audio_format,omitempty"`
-	OutputAudioFormat       string                         `json:"output_audio_format,omitempty"`
+	InputAudioFormat        AudioFormat                    `json:"input_audio_format,omitempty"`
+	OutputAudioFormat       AudioFormat                    `json:"output_audio_format,omitempty"`
 	Instructions            string                         `json:"instructions,omitempty"`
 	Temperature             *float64                       `json:"temperature,omitempty"`
 	TurnDetection           *TurnDetectionConfig           `json:"turn_detection,omitempty"`
 	TopP                    *float64                       `json:"top_p,omitempty"`
 	PresencePenalty         *float64                       `json:"presence_penalty,omitempty"`
 	FrequencyPenalty        *float64                       `json:"frequency_penalty,omitempty"`
-	MaxResponseOutputTokens *int                           `json:"max_response_output_tokens,omitempty"`
+	MaxResponseOutputTokens interface{}                    `json:"max_response_output_tokens,omitempty"` // can be number or "inf"
 	InputAudioTranscription *InputAudioTranscriptionConfig `json:"input_audio_transcription,omitempty"`
 	SpeechSettings          *SpeechSettings                `json:"speech_settings,omitempty"`
 	Tools                   []interface{}                  `json:"tools,omitempty"`
-	ToolChoice              string                         `json:"tool_choice,omitempty"`
+	ToolChoice              ToolChoiceLiteral              `json:"tool_choice,omitempty"`
 }
 
 // SessionUpdateRequest represents the session.update request
 type SessionUpdateRequest struct {
-	Type    string        `json:"type"` // "session.update"
-	Session SessionConfig `json:"session"`
+	Type    ClientEventType `json:"type"` // "session.update"
+	Session SessionConfig   `json:"session"`
 }
 
 // AudioBufferAppendRequest represents the input_audio_buffer.append request
 type AudioBufferAppendRequest struct {
-	Type  string `json:"type"`  // "input_audio_buffer.append"
-	Audio string `json:"audio"` // Base64-encoded audio chunk
+	Type  ClientEventType `json:"type"`  // "input_audio_buffer.append"
+	Audio string          `json:"audio"` // Base64-encoded audio chunk
 }
 
 // AudioBufferCommitRequest represents the input_audio_buffer.commit request
 type AudioBufferCommitRequest struct {
-	Type string `json:"type"` // "input_audio_buffer.commit"
+	Type ClientEventType `json:"type"` // "input_audio_buffer.commit"
 }
 
 // ConversationItemCreateRequest represents the conversation.item.create request
 type ConversationItemCreateRequest struct {
-	Type           string           `json:"type"` // "conversation.item.create"
+	Type           ClientEventType  `json:"type"` // "conversation.item.create"
 	PreviousItemID string           `json:"previous_item_id,omitempty"`
 	Item           ConversationItem `json:"item"`
 }
 
 // AudioBufferClearRequest represents the input_audio_buffer.clear message
 type AudioBufferClearRequest struct {
-	Type string `json:"type"` // "input_audio_buffer.clear"
+	Type ClientEventType `json:"type"` // "input_audio_buffer.clear"
 }
 
 // ConversationItemTruncateRequest represents the conversation.item.truncate message
 type ConversationItemTruncateRequest struct {
-	Type         string `json:"type"`    // "conversation.item.truncate"
-	ItemID       string `json:"item_id"` // ID of the item to truncate from
-	ContentIndex int    `json:"content_index"`
-	AudioEndMs   int    `json:"audio_end_ms"`
+	Type         ClientEventType `json:"type"`    // "conversation.item.truncate"
+	ItemID       string          `json:"item_id"` // ID of the item to truncate from
+	ContentIndex int             `json:"content_index"`
+	AudioEndMs   int             `json:"audio_end_ms"`
 }
 
 // ConversationItemDeleteRequest represents the conversation.item.delete message
 type ConversationItemDeleteRequest struct {
-	Type   string `json:"type"`    // "conversation.item.delete"
-	ItemID string `json:"item_id"` // ID of the item to delete
+	Type   ClientEventType `json:"type"`    // "conversation.item.delete"
+	ItemID string          `json:"item_id"` // ID of the item to delete
 }
 
 // ResponseConfig holds configuration for response creation
 type ResponseConfig struct {
 	Modalities              []string          `json:"modalities,omitempty"`
 	Instructions            string            `json:"instructions,omitempty"`
-	Voice                   string            `json:"voice,omitempty"`
-	OutputAudioFormat       string            `json:"output_audio_format,omitempty"`
+	Voice                   Voice             `json:"voice,omitempty"`
+	OutputAudioFormat       AudioFormat       `json:"output_audio_format,omitempty"`
 	Tools                   []interface{}     `json:"tools,omitempty"`
-	ToolChoice              string            `json:"tool_choice,omitempty"`
+	ToolChoice              ToolChoiceLiteral `json:"tool_choice,omitempty"`
 	Temperature             *float64          `json:"temperature,omitempty"`
 	MaxResponseOutputTokens interface{}       `json:"max_response_output_tokens,omitempty"` // can be number or "inf"
 	Conversation            string            `json:"conversation,omitempty"`               // "auto" or "none"
@@ -535,13 +537,13 @@ type ResponseConfig struct {
 
 // ResponseCreateRequest represents the response.create message
 type ResponseCreateRequest struct {
-	Type     string          `json:"type"` // "response.create"
+	Type     ClientEventType `json:"type"` // "response.create"
 	Response *ResponseConfig `json:"response,omitempty"`
 }
 
 // ResponseCancelRequest represents the response.cancel message
 type ResponseCancelRequest struct {
-	Type string `json:"type"` // "response.cancel"
+	Type ClientEventType `json:"type"` // "response.cancel"
 }
 
 // Helper function to encode audio data in base64

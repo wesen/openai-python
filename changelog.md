@@ -1,5 +1,25 @@
 # Changelog
 
+## Added Enum Types for Better Type Safety
+
+Created Go enum types for all TypeScript enums to improve type safety and code readability:
+
+- Added enum types like `AudioFormat`, `ContentPartType`, `MessageRole`, etc. that correspond to TypeScript enums
+- Updated all struct fields to use these typed enums instead of string values
+- Updated the client `Config` struct to use the new enum types
+- Refactored event type constants to reference the enum values
+- Ensures consistent usage of enum values throughout the codebase
+- Makes the Go code more aligned with the TypeScript definitions
+- Fixed issue with `MaxResponseOutputTokens` in `Config` to handle both int and string values
+
+## Fixed MaxResponseOutputTokens Type to Handle String Values
+
+Updated the SessionConfig struct to properly handle both numeric values and string literals for max_response_output_tokens.
+
+- Changed MaxResponseOutputTokens field in SessionConfig from *int to interface{} to support both number and "inf" values
+- This fixes JSON unmarshaling errors when receiving string values like "inf" for this field
+- Ensures consistent type handling across all structs (SessionInfo, SessionConfig, ResponseConfig)
+
 ## Improved Type Safety in Events Module
 
 Refactored the events.go file to use named types for all nested structs, improving type safety and preventing type mismatch errors when using event structures elsewhere in the codebase.

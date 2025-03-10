@@ -27,7 +27,7 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 
 	headers := http.Header{}
 	headers.Add("Authorization", "Bearer "+cm.client.apiKey)
-	headers.Add("OpenAI-Beta", "realtime")
+	headers.Add("OpenAI-Beta", "realtime=v1")
 
 	// Create WebSocket Dialer
 	dialer := websocket.Dialer{

@@ -18,3 +18,11 @@ Updated the event handling in client_impl.go to match the correct event structur
 - Fixed audio data access in AudioDeltaEvent (using Delta field instead of Audio)
 - Updated token usage access in ResponseDoneEvent to match the correct structure
 - Ensure all event processing code is consistent with the defined event structures 
+
+# Fixed OpenAI-Beta header format in WebSocket connection
+
+Fixed an issue where the WebSocket connection to the OpenAI Realtime API was failing due to an invalid beta header format:
+
+- Updated the OpenAI-Beta header from "realtime" to "realtime=v1" to match the required format
+- Fixed the "Invalid beta header provided" error which was preventing successful connection
+- Ensured compatibility with the latest OpenAI Realtime API requirements 

@@ -135,3 +135,13 @@ Updated the message types in the OpenAI Realtime API client to match the Azure O
 - Properly structured request and response types to match the API specification
 
 These changes ensure compatibility with the latest API specification and provide access to all available features. 
+
+## Fixed Nil Pointer Dereference in NewClient
+
+Fixed a nil pointer dereference in the NewClient function that was causing the client to crash when initializing:
+
+- Added a nil check for the context error before calling Error() on it
+- Added proper error handling for the errgroup context in the initialization process
+- Improved debug logging to handle the case where the context is not yet canceled
+
+This fixes the panic that occurred when running the voice assistant with text input. 

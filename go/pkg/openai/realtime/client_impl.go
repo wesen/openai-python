@@ -64,9 +64,7 @@ func NewClient(apiKey string, model string) Client {
 	// Create the errgroup
 	eg, egCtx := errgroup.WithContext(client.ctx)
 	client.eg = eg
-
-	// Use egCtx in place of client.ctx where cancellation needs to be propagated
-	client.logger.Debug().Msg("Initialized errgroup with context: " + egCtx.Err().Error())
+	client.ctx = egCtx
 
 	// Create and initialize components
 	client.initializeComponents()
@@ -266,8 +264,8 @@ func (c *clientImpl) SendText(ctx context.Context, text string) error {
 	textMsg := ConversationItemCreateRequest{
 		Type: "conversation.item.create",
 		Item: ConversationItem{
-			Role: "user",
-			Type: "text",
+			Role: MessageRoleUser,
+			Type: ItemTypeMessage,
 			Content: ItemContent{
 				Text: text,
 			},

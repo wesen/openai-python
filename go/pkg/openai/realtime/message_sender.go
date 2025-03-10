@@ -78,16 +78,26 @@ func (ms *messageSender) sendJSONMessage(msg interface{}) error {
 		// For binary audio data, manually construct a more efficient representation
 		// that doesn't encode the base64 data to JSON string and escape it
 		type jsonAudioBufferAppend struct {
-			Type  string `json:"type"`
-			Audio string `json:"audio"`
+			Type  ClientEventType `json:"type"`
+			Audio string          `json:"audio"`
 		}
 
-		// Wrap in WriteJSON to handle locking and other error states
-		return ms.conn.WriteJSON(jsonAudioBufferAppend{
+		jsonMsg := jsonAudioBufferAppend{
 			Type:  audioMsg.Type,
 			Audio: audioMsg.Audio,
-		})
+		}
+
+		// Log the outgoing JSON message
+		jsonBytes, _ := json.Marshal(jsonMsg)
+		ms.logger.Debug().RawJSON("outgoing_json", jsonBytes).Msg("Sending JSON message")
+
+		// Wrap in WriteJSON to handle locking and other error states
+		return ms.conn.WriteJSON(jsonMsg)
 	}
+
+	// For all other message types, log and use standard JSON serialization
+	jsonBytes, _ := json.Marshal(msg)
+	ms.logger.Debug().RawJSON("outgoing_json", jsonBytes).Msg("Sending JSON message")
 
 	// For all other message types, use standard JSON serialization
 	return ms.conn.WriteJSON(msg)

@@ -76,7 +76,7 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 
 	// Configure session
 	config := &realtime.Config{
-		Voice:        voice,
+		Voice:        realtime.Voice(voice),
 		Modalities:   []string{"text", "audio"},
 		Instructions: instructions,
 	}
@@ -115,7 +115,7 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 	} else {
 		// Read the input audio file
 		logger.Info().Str("file", inputFile).Msg("Reading audio file")
-		audioData, err := ioutil.ReadFile(inputFile)
+		audioData, err := os.ReadFile(inputFile)
 		if err != nil {
 			logger.Fatal().Err(err).Str("file", inputFile).Msg("Failed to read audio file")
 		}
@@ -126,6 +126,9 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 		// In a real application, you would stream audio in chunks
 		// Here, we simulate by sending the whole file at once
 		responseText, responseAudio, err = assembler.SendAudioAndWaitForResponse(ctx, audioData, false)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("Failed to send audio input")
+		}
 	}
 
 	if err != nil {
