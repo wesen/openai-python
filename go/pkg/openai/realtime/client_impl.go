@@ -389,6 +389,79 @@ func (c *clientImpl) UpdateSession(ctx context.Context, config *Config) error {
 	if config.Temperature != nil {
 		session["temperature"] = *config.Temperature
 	}
+
+	// Add new parameters
+	if config.TopP != nil {
+		session["top_p"] = *config.TopP
+	}
+	if config.PresencePenalty != nil {
+		session["presence_penalty"] = *config.PresencePenalty
+	}
+	if config.FrequencyPenalty != nil {
+		session["frequency_penalty"] = *config.FrequencyPenalty
+	}
+	if config.MaxResponseOutputTokens != nil {
+		session["max_response_output_tokens"] = *config.MaxResponseOutputTokens
+	}
+
+	// Handle InputAudioTranscription if provided
+	if config.InputAudioTranscription != nil {
+		iat := map[string]interface{}{}
+
+		if config.InputAudioTranscription.Language != "" {
+			iat["language"] = config.InputAudioTranscription.Language
+		}
+		if config.InputAudioTranscription.Type != "" {
+			iat["type"] = config.InputAudioTranscription.Type
+		}
+		iat["interim"] = config.InputAudioTranscription.Interim
+
+		if len(config.InputAudioTranscription.PhraseHints) > 0 {
+			iat["phrase_hints"] = config.InputAudioTranscription.PhraseHints
+		}
+
+		iat["profanity_filter"] = config.InputAudioTranscription.ProfanityFilter
+
+		if len(config.InputAudioTranscription.Redact) > 0 {
+			iat["redact"] = config.InputAudioTranscription.Redact
+		}
+
+		iat["diarize"] = config.InputAudioTranscription.Diarize
+
+		session["input_audio_transcription"] = iat
+	}
+
+	// Handle SpeechSettings if provided
+	if config.SpeechSettings != nil {
+		ss := map[string]interface{}{}
+
+		// Voice is already set at the top level
+		if config.SpeechSettings.Speed != 0 {
+			ss["speed"] = config.SpeechSettings.Speed
+		}
+		if config.SpeechSettings.Stability != 0 {
+			ss["stability"] = config.SpeechSettings.Stability
+		}
+		if config.SpeechSettings.Similarity != 0 {
+			ss["similarity"] = config.SpeechSettings.Similarity
+		}
+		if config.SpeechSettings.Style != 0 {
+			ss["style"] = config.SpeechSettings.Style
+		}
+		ss["presence_text"] = config.SpeechSettings.PresenceText
+
+		session["speech_settings"] = ss
+	}
+
+	// Handle Tools if provided
+	if config.Tools != nil && len(config.Tools) > 0 {
+		session["tools"] = config.Tools
+	}
+
+	if config.ToolChoice != "" {
+		session["tool_choice"] = config.ToolChoice
+	}
+
 	if config.Logger != nil {
 		// Don't actually send this to the API
 		c.SetLogger(*config.Logger)
@@ -704,101 +777,148 @@ func (ep *eventProcessor) ProcessRawEvent(data []byte) {
 
 // createEventObject creates the appropriate event object based on type
 func (ep *eventProcessor) createEventObject(eventType string, data []byte) (Event, error) {
-	var event Event
 	var err error
+	var event Event
 
 	switch eventType {
 	case EventSessionCreated:
-		var e SessionCreatedEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+		var sessionEvent SessionCreatedEvent
+		if err = json.Unmarshal(data, &sessionEvent); err != nil {
+			return nil, err
+		}
+		sessionEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &sessionEvent
 
 	case EventSessionUpdated:
-		var e SessionUpdatedEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+		var sessionEvent SessionUpdatedEvent
+		if err = json.Unmarshal(data, &sessionEvent); err != nil {
+			return nil, err
+		}
+		sessionEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &sessionEvent
 
 	case EventConversationItemCreated:
-		var e ConversationItemCreatedEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+		var itemEvent ConversationItemCreatedEvent
+		if err = json.Unmarshal(data, &itemEvent); err != nil {
+			return nil, err
+		}
+		itemEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &itemEvent
 
-	case EventTranscriptionCompleted:
-		var e TranscriptionCompletedEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+	case EventConversationItemInputAudioTranscriptionCompleted:
+		var transcriptionEvent TranscriptionCompletedEvent
+		if err = json.Unmarshal(data, &transcriptionEvent); err != nil {
+			return nil, err
+		}
+		transcriptionEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &transcriptionEvent
+
+		// For logging convenience, log the transcription
+		transcript := transcriptionEvent.Transcript
+		if transcript != "" {
+			ep.logger.Debug().Str("transcript", transcript).Msg("Transcription received")
+		}
 
 	case EventResponseCreated:
-		var e ResponseCreatedEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+		var responseEvent ResponseCreatedEvent
+		if err = json.Unmarshal(data, &responseEvent); err != nil {
+			return nil, err
+		}
+		responseEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &responseEvent
 
-		// Store the response ID for tracking
-		ep.client.responseManager.SetResponseID(e.ResponseID)
+		// Store the current response ID and reset buffers
+		ep.client.responseManager.SetResponseID(responseEvent.Response.ID)
+		ep.client.responseManager.ResetResponse()
 
-	case EventContentPartAdded:
-		var e ContentPartAddedEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+	case EventResponseContentPartAdded:
+		var contentEvent ContentPartAddedEvent
+		if err = json.Unmarshal(data, &contentEvent); err != nil {
+			return nil, err
+		}
+		contentEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &contentEvent
 
-		// Update the response text
-		ep.client.responseManager.AppendResponseText(e.ResponseID, e.Content.Text)
+		// For logging convenience, extract the content text
+		text := contentEvent.Part.Text
+		if text != "" {
+			ep.logger.Debug().Str("text", text).Msg("Content received")
 
-	case EventContentPartDone:
-		var e ContentPartDoneEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+			// Append to the response buffer
+			ep.client.responseManager.AppendResponseText(contentEvent.ResponseID, text)
+		}
 
-	case EventAudioDelta:
-		var e AudioDeltaEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+	case EventResponseContentPartDone:
+		var doneEvent ContentPartDoneEvent
+		if err = json.Unmarshal(data, &doneEvent); err != nil {
+			return nil, err
+		}
+		doneEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &doneEvent
 
-		// Update the response audio
-		if e.Audio != "" {
-			audioBytes, decodeErr := base64.StdEncoding.DecodeString(e.Audio)
-			if decodeErr == nil {
-				ep.client.responseManager.AppendResponseAudio(e.ResponseID, audioBytes)
+	case EventResponseAudioDelta:
+		var audioEvent AudioDeltaEvent
+		if err = json.Unmarshal(data, &audioEvent); err != nil {
+			return nil, err
+		}
+		audioEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &audioEvent
+
+		// Decode and store audio
+		if audioEvent.Delta != "" {
+			audioData, err := base64.StdEncoding.DecodeString(audioEvent.Delta)
+			if err != nil {
+				ep.logger.Warn().Err(err).Msg("Failed to decode audio data")
+			} else {
+				ep.client.responseManager.AppendResponseAudio(audioEvent.ResponseID, audioData)
 			}
 		}
 
-	case EventAudioDone:
-		var e AudioDoneEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+	case EventResponseAudioDone:
+		var doneEvent AudioDoneEvent
+		if err = json.Unmarshal(data, &doneEvent); err != nil {
+			return nil, err
+		}
+		doneEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &doneEvent
 
 	case EventResponseDone:
-		var e ResponseDoneEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+		var doneEvent ResponseDoneEvent
+		if err = json.Unmarshal(data, &doneEvent); err != nil {
+			return nil, err
+		}
+		doneEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &doneEvent
+
+		// Log token usage
+		ep.logger.Debug().
+			Int("input_tokens", doneEvent.Response.Usage.InputTokens).
+			Int("output_tokens", doneEvent.Response.Usage.OutputTokens).
+			Int("audio_tokens", doneEvent.Response.Usage.InputTokenDetails.AudioTokens).
+			Int("cached_tokens", doneEvent.Response.Usage.InputTokenDetails.CachedTokens).
+			Msg("Response completed")
 
 	case EventError:
-		var e ErrorEvent
-		err = json.Unmarshal(data, &e)
-		e.BaseEvent = NewBaseEvent(eventType, data)
-		event = &e
+		var errorEvent ErrorEvent
+		if err = json.Unmarshal(data, &errorEvent); err != nil {
+			return nil, err
+		}
+		errorEvent.BaseEvent = NewBaseEvent(eventType, data)
+		event = &errorEvent
+
+		// Log the error for convenience
+		ep.logger.Error().
+			Str("error_type", errorEvent.Error.Type).
+			Str("error_code", errorEvent.Error.Code).
+			Str("error_message", errorEvent.Error.Message).
+			Msg("Received error event")
 
 	default:
-		ep.logger.Warn().Str("event_type", eventType).Msg("Unknown event type")
-		// For unknown event types, create a generic event
+		// For unknown events, just create a basic event wrapper
 		event = &genericEvent{
 			eventType: eventType,
 			data:      data,
 		}
-	}
-
-	if err != nil {
-		return nil, err
 	}
 
 	return event, nil
@@ -959,10 +1079,10 @@ func (ep *eventProcessor) handleDefaultEvent(event Event) error {
 	case EventResponseDone:
 		if e, ok := event.(*ResponseDoneEvent); ok {
 			ep.logger.Info().
-				Str("response_id", e.ResponseID).
-				Int("input_tokens", e.Usage.InputTokens).
-				Int("output_tokens", e.Usage.OutputTokens).
-				Int("audio_tokens", e.Usage.AudioTokens).
+				Str("response_id", e.Response.ID).
+				Int("input_tokens", e.Response.Usage.InputTokens).
+				Int("output_tokens", e.Response.Usage.OutputTokens).
+				Int("audio_tokens", e.Response.Usage.InputTokenDetails.AudioTokens).
 				Msg("Response completed")
 
 			// Reset for next response

@@ -50,6 +50,36 @@ type Config struct {
 	Temperature   *float64
 	Logger        *zerolog.Logger // Optional logger for the client
 	LogLevel      zerolog.Level   // Optional log level (debug, info, warn, error)
+
+	// Additional model parameters
+	TopP                    *float64
+	PresencePenalty         *float64
+	FrequencyPenalty        *float64
+	MaxResponseOutputTokens *int
+
+	// Input audio transcription configuration
+	InputAudioTranscription *struct {
+		Language        string
+		Type            string // "server" or "client"
+		Interim         bool
+		PhraseHints     []string
+		ProfanityFilter bool
+		Redact          []string
+		Diarize         bool
+	}
+
+	// Speech settings
+	SpeechSettings *struct {
+		Speed        float64
+		Stability    float64
+		Similarity   float64
+		Style        float64
+		PresenceText bool
+	}
+
+	// Function calling options
+	Tools      []interface{}
+	ToolChoice string
 }
 
 // Event represents a message from the API

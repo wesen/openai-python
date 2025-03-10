@@ -120,4 +120,18 @@ Fixed the `conversation.item.create` message format to include the required `ite
 
 - Updated the `ConversationItemCreateRequest` struct with the new field
 - Modified the `SendText` method implementation to include the field
-- Fixed the "Missing required parameter: 'item.type'" error 
+- Fixed the "Missing required parameter: 'item.type'" error
+
+## Updated Realtime API Message Types to Match Azure Documentation
+
+Updated the message types in the OpenAI Realtime API client to match the Azure OpenAI Realtime API reference. This includes:
+
+- Added missing fields to the `SessionCreatedEvent` structure (InputAudioTranscription, TopP, PresencePenalty, FrequencyPenalty, SpeechSettings)
+- Updated `SessionUpdatedEvent` structure with all configurable fields and proper field types
+- Added `Type` field to conversation items and metadata support
+- Enhanced `Config` struct with additional options for speech settings, audio transcription, and model parameters
+- Updated `UpdateSession` method to handle all the new configuration options
+- Improved error handling and logging in the event processor
+- Properly structured request and response types to match the API specification
+
+These changes ensure compatibility with the latest API specification and provide access to all available features. 
