@@ -69,7 +69,9 @@ func (ep *eventProcessor) ProcessRawEvent(data []byte) {
 	}
 
 	// Process the event with registered handlers
-	ep.processEvent(event)
+	if err := ep.processEvent(event); err != nil {
+		ep.logger.Error().Err(err).Str("event_type", eventType).Msg("Error processing event")
+	}
 }
 
 // createEventObject creates the appropriate event object based on type

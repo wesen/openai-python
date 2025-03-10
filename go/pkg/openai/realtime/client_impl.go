@@ -266,10 +266,15 @@ func (c *clientImpl) ListenForEvents(ctx context.Context) error {
 		return errors.New("client is not running")
 	}
 
-	// Add to the errgroup to track this goroutine
-	c.eg.Go(func() error {
-		return c.eventProcessor.listenLoop(ctx)
-	})
+	// The actual WebSocket message reading is now handled by the connectionHandler,
+	// and events are processed by the eventProcessor automatically.
+	// This method now just ensures the eventProcessor is started.
+
+	// If the event processor isn't running, start it
+	if !c.eventProcessor.running.Load() {
+		c.logger.Debug().Msg("Starting event processor from ListenForEvents")
+		return c.eventProcessor.Start(ctx)
+	}
 
 	return nil
 }
@@ -360,7 +365,7 @@ func (c *clientImpl) UpdateSession(ctx context.Context, config *Config) error {
 		}
 
 		// Configure tools if provided
-		if config.Tools != nil && len(config.Tools) > 0 {
+		if len(config.Tools) > 0 {
 			updateMsg.Session.Tools = config.Tools
 		}
 
