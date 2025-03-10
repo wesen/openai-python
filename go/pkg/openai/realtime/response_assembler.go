@@ -2,9 +2,12 @@ package realtime
 
 import (
 	"context"
+	"encoding/base64"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // ResponseAssembler is a utility to assemble a complete response from streaming events
@@ -27,10 +30,10 @@ func NewResponseAssembler(client Client) *ResponseAssembler {
 	}
 
 	// Register handlers for the various response events
-	client.SetEventHandler(EventContentPartAdded, ra.handleContentPart)
-	client.SetEventHandler(EventContentPartDone, ra.handleContentDone)
-	client.SetEventHandler(EventAudioDelta, ra.handleAudioDelta)
-	client.SetEventHandler(EventAudioDone, ra.handleAudioDone)
+	client.SetEventHandler(EventResponseContentPartAdded, ra.handleContentPart)
+	client.SetEventHandler(EventResponseContentPartDone, ra.handleContentDone)
+	client.SetEventHandler(EventResponseAudioDelta, ra.handleAudioDelta)
+	client.SetEventHandler(EventResponseAudioDone, ra.handleAudioDone)
 	client.SetEventHandler(EventResponseDone, ra.handleResponseDone)
 
 	return ra
@@ -42,125 +45,120 @@ func (ra *ResponseAssembler) handleContentPart(event Event) error {
 		ra.mutex.Lock()
 		defer ra.mutex.Unlock()
 
-		ra.responseText += e.Content.Text
+		ra.responseText += e.Part.Text
 	}
 	return nil
 }
 
 // handleContentDone handles the response.content_part.done event
 func (ra *ResponseAssembler) handleContentDone(event Event) error {
-	ra.textDone.Store(true)
-	ra.checkDone()
+	if _, ok := event.(*ContentPartDoneEvent); ok {
+		ra.textDone.Store(true)
+		ra.checkDone()
+	}
 	return nil
 }
 
 // handleAudioDelta handles the response.audio.delta event
 func (ra *ResponseAssembler) handleAudioDelta(event Event) error {
 	if e, ok := event.(*AudioDeltaEvent); ok {
-		// Audio decoding is handled in the clientImpl directly
-		// This event is just for notification purposes
-		_ = e
+		audioBytes, err := base64.StdEncoding.DecodeString(e.Delta)
+		if err != nil {
+			return err
+		}
+
+		ra.mutex.Lock()
+		defer ra.mutex.Unlock()
+		ra.responseAudio = append(ra.responseAudio, audioBytes...)
 	}
 	return nil
 }
 
 // handleAudioDone handles the response.audio.done event
 func (ra *ResponseAssembler) handleAudioDone(event Event) error {
-	ra.audioDone.Store(true)
-	ra.checkDone()
+	if _, ok := event.(*AudioDoneEvent); ok {
+		ra.audioDone.Store(true)
+		ra.checkDone()
+	}
 	return nil
 }
 
 // handleResponseDone handles the response.done event
 func (ra *ResponseAssembler) handleResponseDone(event Event) error {
-	ra.mutex.Lock()
-	defer ra.mutex.Unlock()
+	if _, ok := event.(*ResponseDoneEvent); ok {
+		ra.textDone.Store(true)
+		ra.audioDone.Store(true)
+		ra.done.Store(true)
 
-	// Get the final response from the client
-	responseText, responseAudio := ra.client.(interface{ GetResponse() (string, []byte) }).GetResponse()
-	ra.responseText = responseText
-	ra.responseAudio = make([]byte, len(responseAudio))
-	copy(ra.responseAudio, responseAudio)
-
-	ra.done.Store(true)
-	close(ra.responseChan)
-
+		// Signal that the response is complete
+		select {
+		case ra.responseChan <- struct{}{}:
+		default:
+			// Channel already has a value, no need to send again
+		}
+	}
 	return nil
 }
 
 // checkDone checks if both text and audio are done, and if so, signals completion
 func (ra *ResponseAssembler) checkDone() {
-	if ra.textDone.Load() && ra.audioDone.Load() {
-		ra.mutex.Lock()
-		defer ra.mutex.Unlock()
+	if ra.textDone.Load() && ra.audioDone.Load() && !ra.done.Load() {
+		ra.done.Store(true)
 
-		if !ra.done.Load() {
-			// Both text and audio are done, but we didn't get a response.done event yet
-			// We'll signal completion here just in case
-
-			// Get the final response from the client
-			responseText, responseAudio := ra.client.(interface{ GetResponse() (string, []byte) }).GetResponse()
-			ra.responseText = responseText
-			ra.responseAudio = make([]byte, len(responseAudio))
-			copy(ra.responseAudio, responseAudio)
-
-			ra.done.Store(true)
-			close(ra.responseChan)
+		// Signal that the response is complete
+		select {
+		case ra.responseChan <- struct{}{}:
+		default:
+			// Channel already has a value, no need to send again
 		}
 	}
 }
 
 // WaitForResponse waits for the complete response (text and audio)
 func (ra *ResponseAssembler) WaitForResponse(ctx context.Context) (string, []byte, error) {
-	// Reset the state for a new response
-	ra.mutex.Lock()
-	ra.responseText = ""
-	ra.responseAudio = nil
-	ra.textDone.Store(false)
-	ra.audioDone.Store(false)
-	ra.done.Store(false)
-	ra.responseChan = make(chan struct{})
-	ra.mutex.Unlock()
-
-	// Wait for the response to complete or context to cancel
+	// Wait for response or context cancellation
 	select {
 	case <-ra.responseChan:
 		// Response is complete
-		ra.mutex.Lock()
-		defer ra.mutex.Unlock()
-
-		// Create a copy of the audio bytes to avoid race conditions
-		audioCopy := make([]byte, len(ra.responseAudio))
-		copy(audioCopy, ra.responseAudio)
-
-		return ra.responseText, audioCopy, nil
-
 	case <-ctx.Done():
 		return "", nil, ctx.Err()
 	}
+
+	// Lock to safely access response data
+	ra.mutex.Lock()
+	defer ra.mutex.Unlock()
+
+	// Return the assembled response
+	return ra.responseText, ra.responseAudio, nil
 }
 
 // SendTextAndWaitForResponse sends a text message and waits for a complete response
 func (ra *ResponseAssembler) SendTextAndWaitForResponse(ctx context.Context, text string) (string, []byte, error) {
+	// Reset state
+	ra.Reset()
+
 	// Send the text message
 	err := ra.client.SendText(ctx, text)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// Wait for the response
+	// Wait for a response
 	return ra.WaitForResponse(ctx)
 }
 
 // SendAudioAndWaitForResponse sends audio data and waits for a complete response
 func (ra *ResponseAssembler) SendAudioAndWaitForResponse(ctx context.Context, audio []byte, commit bool) (string, []byte, error) {
+	// Reset state
+	ra.Reset()
+
 	// Send the audio data
 	err := ra.client.SendAudio(ctx, audio)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// If manual commit is required, send the commit signal
+	// Commit the audio if requested
 	if commit {
 		err = ra.client.CommitAudio(ctx)
 		if err != nil {
@@ -168,71 +166,61 @@ func (ra *ResponseAssembler) SendAudioAndWaitForResponse(ctx context.Context, au
 		}
 	}
 
-	// Wait for the response
+	// Wait for a response
 	return ra.WaitForResponse(ctx)
 }
 
 // StreamAudioAndWaitForResponse streams audio in chunks and waits for a complete response
 func (ra *ResponseAssembler) StreamAudioAndWaitForResponse(ctx context.Context, audioChunks <-chan []byte, chunkInterval time.Duration, commit bool) (string, []byte, error) {
-	// Create a new context with cancellation
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// Reset state
+	ra.Reset()
 
-	// Start a goroutine to send audio chunks
-	errChan := make(chan error, 1)
-	go func() {
-		defer close(errChan)
+	// Create an errgroup with a derived context
+	g, ctx := errgroup.WithContext(ctx)
 
+	// Start a goroutine to stream the audio chunks
+	g.Go(func() error {
 		for {
 			select {
 			case <-ctx.Done():
-				return
-
+				return ctx.Err()
 			case chunk, ok := <-audioChunks:
 				if !ok {
-					// Channel closed, all chunks sent
-					if commit {
-						if err := ra.client.CommitAudio(ctx); err != nil {
-							errChan <- err
-						}
-					}
-					return
+					// Channel is closed, we're done streaming
+					return nil
 				}
 
 				// Send the audio chunk
 				if err := ra.client.SendAudio(ctx, chunk); err != nil {
-					errChan <- err
-					return
+					return err
 				}
 
-				// Wait for the chunk interval
+				// Wait for the specified interval
 				if chunkInterval > 0 {
-					time.Sleep(chunkInterval)
+					select {
+					case <-time.After(chunkInterval):
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 			}
 		}
-	}()
+	})
 
-	// Wait for the audio to be sent or an error to occur
-	var err error
-	select {
-	case err = <-errChan:
-		if err != nil {
-			return "", nil, err
-		}
-	case <-ctx.Done():
-		return "", nil, ctx.Err()
-	default:
-		// Continue
-	}
-
-	// Wait for the response
-	respText, respAudio, err := ra.WaitForResponse(ctx)
-	if err != nil {
+	// Wait for streaming to complete and check for errors
+	if err := g.Wait(); err != nil {
 		return "", nil, err
 	}
 
-	return respText, respAudio, nil
+	// Commit the audio if requested
+	if commit {
+		if err := ra.client.CommitAudio(ctx); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// Wait for a response
+	return ra.WaitForResponse(ctx)
 }
 
 // IsResponseComplete checks if a response has been completed
@@ -244,10 +232,17 @@ func (ra *ResponseAssembler) IsResponseComplete() bool {
 func (ra *ResponseAssembler) GetPartialResponse() (string, []byte) {
 	ra.mutex.Lock()
 	defer ra.mutex.Unlock()
+	return ra.responseText, ra.responseAudio
+}
 
-	// Create a copy of the audio bytes to avoid race conditions
-	audioCopy := make([]byte, len(ra.responseAudio))
-	copy(audioCopy, ra.responseAudio)
+// Reset resets the assembler state
+func (ra *ResponseAssembler) Reset() {
+	ra.mutex.Lock()
+	defer ra.mutex.Unlock()
 
-	return ra.responseText, audioCopy
+	ra.responseText = ""
+	ra.responseAudio = nil
+	ra.textDone.Store(false)
+	ra.audioDone.Store(false)
+	ra.done.Store(false)
 }

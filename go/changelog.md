@@ -106,4 +106,18 @@ Updated the client implementation to align with the latest OpenAI Realtime API s
 - Revised event structs to match actual API response formats
 - Added missing client-to-server event types
 - Fixed error handling to correctly process error messages from the API
-- Updated session creation handling to use the proper session ID field 
+- Updated session creation handling to use the proper session ID field
+
+## Fixed Conversation Item Create Message Format
+
+Fixed the `conversation.item.create` message format to include the required `item.type` field:
+
+- Added the missing `item.type` field to the `ConversationItemCreateRequest` struct
+- Updated the `SendText` method to include the `type: "text"` field in the item object
+- Fixed compatibility issue with the OpenAI Realtime API which requires this field
+
+### Changes
+
+- Updated the `ConversationItemCreateRequest` struct with the new field
+- Modified the `SendText` method implementation to include the field
+- Fixed the "Missing required parameter: 'item.type'" error 

@@ -324,6 +324,7 @@ func (c *clientImpl) SendText(ctx context.Context, text string) error {
 		"type": "conversation.item.create",
 		"item": map[string]interface{}{
 			"role": "user",
+			"type": "text",
 			"content": map[string]interface{}{
 				"text": text,
 			},

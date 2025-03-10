@@ -230,6 +230,7 @@ type ConversationItemCreateRequest struct {
 	Type string `json:"type"` // "conversation.item.create"
 	Item struct {
 		Role    string `json:"role"` // "user" or "function"
+		Type    string `json:"type"` // "text"
 		Content struct {
 			Text string `json:"text,omitempty"` // For user messages
 			// For function results when role is "function"
