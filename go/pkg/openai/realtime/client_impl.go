@@ -2,19 +2,12 @@ package realtime
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 )
@@ -27,12 +20,6 @@ const (
 	PingInterval      = 20 * time.Second
 	PongWait          = 30 * time.Second
 )
-
-// Component interface for all components of the client
-type component interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-}
 
 // clientImpl implements the Client interface with an improved concurrent architecture
 type clientImpl struct {
@@ -57,179 +44,142 @@ type clientImpl struct {
 	sessionID atomic.Value // string
 }
 
-// connectionManager handles WebSocket connection and lifecycle
-type connectionManager struct {
-	client     *clientImpl
-	conn       *websocket.Conn
-	connMutex  sync.RWMutex
-	pingTicker *time.Ticker
-	logger     zerolog.Logger
-}
-
-// messageSender handles sending messages to the WebSocket
-type messageSender struct {
-	client    *clientImpl
-	conn      *websocket.Conn
-	connMutex *sync.RWMutex // Points to the same mutex as connectionManager
-	msgQueue  chan interface{}
-	logger    zerolog.Logger
-}
-
-// eventProcessor handles incoming events from the WebSocket
-type eventProcessor struct {
-	client        *clientImpl
-	conn          *websocket.Conn
-	connMutex     *sync.RWMutex // Points to the same mutex as connectionManager
-	eventChan     chan Event
-	eventHandlers map[string][]EventHandler
-	handlersMutex sync.RWMutex
-	logger        zerolog.Logger
-}
-
-// responseManager manages response assembly
-type responseManager struct {
-	client               *clientImpl
-	currentResponseID    atomic.Value // string
-	currentResponseText  atomic.Value // string
-	responseMutex        sync.Mutex
-	currentResponseAudio []byte
-	logger               zerolog.Logger
-}
-
-// genericEvent represents an event with an unknown type
-type genericEvent struct {
-	eventType string
-	data      []byte
-}
-
-// Type returns the type of the event
-func (e *genericEvent) Type() string {
-	return e.eventType
-}
-
-// RawData returns the raw data of the event
-func (e *genericEvent) RawData() []byte {
-	return e.data
-}
-
-// NewClient creates a new client with the provided API key and model
+// NewClient creates a new Client with the given API key and model
 func NewClient(apiKey string, model string) Client {
+	// Use default model if none provided
 	if model == "" {
 		model = DefaultModel
 	}
 
-	// Set up a default logger that logs to stderr
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger().Level(zerolog.InfoLevel)
-
-	// Create the client instance
-	c := &clientImpl{
+	// Create client with default logger
+	client := &clientImpl{
 		apiKey: apiKey,
 		model:  model,
-		logger: logger,
+		logger: zerolog.New(os.Stderr).With().Timestamp().Logger(),
 	}
 
-	// Create shared connection mutex
-	connMutex := &sync.RWMutex{}
+	// Initialize the context for this client
+	client.ctx, client.cancelFunc = context.WithCancel(context.Background())
 
-	// Initialize components
-	c.connManager = &connectionManager{
-		client:    c,
-		connMutex: *connMutex,
-		logger:    logger.With().Str("component", "connection_manager").Logger(),
-	}
+	// Create the errgroup
+	eg, egCtx := errgroup.WithContext(client.ctx)
+	client.eg = eg
 
-	c.messageSender = &messageSender{
-		client:    c,
-		connMutex: connMutex,
-		msgQueue:  make(chan interface{}, 100),
-		logger:    logger.With().Str("component", "message_sender").Logger(),
-	}
+	// Use egCtx in place of client.ctx where cancellation needs to be propagated
+	client.logger.Debug().Msg("Initialized errgroup with context: " + egCtx.Err().Error())
 
-	c.eventProcessor = &eventProcessor{
-		client:        c,
-		connMutex:     connMutex,
-		eventChan:     make(chan Event, 100),
-		eventHandlers: make(map[string][]EventHandler),
-		logger:        logger.With().Str("component", "event_processor").Logger(),
-	}
+	// Create and initialize components
+	client.initializeComponents()
 
-	c.responseManager = &responseManager{
-		client: c,
-		logger: logger.With().Str("component", "response_manager").Logger(),
-	}
-
-	// Initialize atomic values
-	c.sessionID.Store("")
-	c.responseManager.currentResponseID.Store("")
-	c.responseManager.currentResponseText.Store("")
-
-	return c
+	return client
 }
 
-// SetLogger sets the logger for the client
+// SetLogger sets the logger for the client and its components
 func (c *clientImpl) SetLogger(logger zerolog.Logger) {
 	c.logger = logger
 
-	// Update logger for all components
+	// Update logger in all components
 	c.connManager.logger = logger.With().Str("component", "connection_manager").Logger()
 	c.messageSender.logger = logger.With().Str("component", "message_sender").Logger()
 	c.eventProcessor.logger = logger.With().Str("component", "event_processor").Logger()
 	c.responseManager.logger = logger.With().Str("component", "response_manager").Logger()
 }
 
-// Connect establishes a WebSocket connection with the OpenAI Realtime API
+// Connect establishes a WebSocket connection with the API
 func (c *clientImpl) Connect(ctx context.Context) error {
-	// Check if already connected and running
+	// Don't allow connecting if already running
 	if c.running.Load() {
-		c.logger.Debug().Msg("Client is already connected and running")
-		return errors.New("client is already connected and running")
+		return errors.New("client is already running")
 	}
 
-	// Create a context with cancellation for the client lifecycle
-	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
-
-	// Create an error group for coordinating goroutines
-	c.eg, c.ctx = errgroup.WithContext(c.ctx)
-
-	// Establish WebSocket connection
+	// First initialize the connection
 	if err := c.connManager.connect(ctx); err != nil {
-		c.cancelFunc()
-		return err
+		return fmt.Errorf("connection failed: %w", err)
 	}
 
-	// Start all components
+	// Start internal components after successful connection
 	if err := c.startComponents(); err != nil {
-		c.Close(ctx)
-		return err
+		c.logger.Error().Err(err).Msg("Failed to start components")
+		return fmt.Errorf("failed to start components: %w", err)
 	}
 
+	// Mark client as running
 	c.running.Store(true)
+
+	// Start listening for events
+	err := c.ListenForEvents(c.ctx)
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Failed to start event listening")
+		c.Close(ctx)
+		return fmt.Errorf("failed to start event listening: %w", err)
+	}
+
 	return nil
+}
+
+// initializeComponents initializes all client components
+func (c *clientImpl) initializeComponents() {
+	// Create connection manager
+	c.connManager = &connectionManager{
+		client: c,
+		logger: c.logger.With().Str("component", "connection_manager").Logger(),
+	}
+
+	// Create message sender (shares connection mutex with connection manager)
+	c.messageSender = &messageSender{
+		client:    c,
+		connMutex: &c.connManager.connMutex,
+		msgQueue:  make(chan interface{}, 100),
+		logger:    c.logger.With().Str("component", "message_sender").Logger(),
+	}
+
+	// Create event processor (shares connection mutex with connection manager)
+	c.eventProcessor = &eventProcessor{
+		client:    c,
+		connMutex: &c.connManager.connMutex,
+		eventChan: make(chan Event, 100),
+		logger:    c.logger.With().Str("component", "event_processor").Logger(),
+	}
+
+	// Create response manager
+	c.responseManager = &responseManager{
+		client: c,
+		logger: c.logger.With().Str("component", "response_manager").Logger(),
+	}
+
+	// Initialize atomic values
+	c.sessionID.Store("")
+	c.responseManager.currentResponseID.Store("")
+	c.responseManager.currentResponseText.Store("")
 }
 
 // startComponents starts all client components
 func (c *clientImpl) startComponents() error {
-	// Get the connection reference
+	// Update connection references in components after connection is established
 	c.connManager.connMutex.RLock()
 	conn := c.connManager.conn
 	c.connManager.connMutex.RUnlock()
 
-	// Set connection reference in components
+	if conn == nil {
+		return errors.New("no active connection")
+	}
+
+	// Update connection reference in components
 	c.messageSender.conn = conn
 	c.eventProcessor.conn = conn
 
-	// Start components with errgroup
-	c.eg.Go(func() error {
-		return c.messageSender.Start(c.ctx)
-	})
+	// Start each component
+	if err := c.connManager.Start(c.ctx); err != nil {
+		return fmt.Errorf("failed to start connection manager: %w", err)
+	}
 
-	c.eg.Go(func() error {
-		return c.eventProcessor.Start(c.ctx)
-	})
+	if err := c.messageSender.Start(c.ctx); err != nil {
+		return fmt.Errorf("failed to start message sender: %w", err)
+	}
 
-	c.eg.Go(func() error {
-		return c.connManager.Start(c.ctx)
-	})
+	if err := c.eventProcessor.Start(c.ctx); err != nil {
+		return fmt.Errorf("failed to start event processor: %w", err)
+	}
 
 	return nil
 }
@@ -237,238 +187,213 @@ func (c *clientImpl) startComponents() error {
 // Close terminates the WebSocket connection
 func (c *clientImpl) Close(ctx context.Context) error {
 	if !c.running.Load() {
-		return nil
+		return nil // Already closed
 	}
 
-	c.logger.Debug().Msg("Closing client connection")
+	// Set running to false first to prevent new operations
+	c.running.Store(false)
 
-	// Cancel the client context to signal all components to stop
+	// Cancel the client context to stop all operations
 	c.cancelFunc()
 
-	// Create a timeout context for shutdown
-	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	// Stop components in reverse order
+	var firstErr error
 
-	// Wait for all goroutines to complete or timeout
-	shutdownDone := make(chan struct{})
-	go func() {
-		_ = c.eg.Wait()
-		close(shutdownDone)
-	}()
-
-	// Wait for shutdown or timeout
-	select {
-	case <-shutdownDone:
-		c.logger.Debug().Msg("All components shut down gracefully")
-	case <-shutdownCtx.Done():
-		c.logger.Warn().Msg("Shutdown timed out, some components may not have shut down cleanly")
+	// Stop event processor
+	if err := c.eventProcessor.Stop(ctx); err != nil && firstErr == nil {
+		firstErr = fmt.Errorf("failed to stop event processor: %w", err)
 	}
 
-	// Close the connection explicitly
-	c.connManager.connMutex.Lock()
-	if c.connManager.conn != nil {
-		err := c.connManager.conn.Close()
-		c.connManager.conn = nil
-		c.connManager.connMutex.Unlock()
-		if err != nil {
-			c.logger.Warn().Err(err).Msg("Error closing WebSocket connection")
-		}
-	} else {
-		c.connManager.connMutex.Unlock()
+	// Stop message sender
+	if err := c.messageSender.Stop(ctx); err != nil && firstErr == nil {
+		firstErr = fmt.Errorf("failed to stop message sender: %w", err)
 	}
 
-	c.running.Store(false)
-	c.logger.Info().Msg("Client closed")
-	return nil
+	// Stop connection manager (closes the connection)
+	if err := c.connManager.Stop(ctx); err != nil && firstErr == nil {
+		firstErr = fmt.Errorf("failed to stop connection manager: %w", err)
+	}
+
+	// Wait for all goroutines managed by errgroup to complete
+	if err := c.eg.Wait(); err != nil && firstErr == nil {
+		firstErr = fmt.Errorf("error while waiting for goroutines to complete: %w", err)
+	}
+
+	return firstErr
 }
 
 // SendAudio sends audio data to the API
 func (c *clientImpl) SendAudio(ctx context.Context, audio []byte) error {
 	if !c.running.Load() {
-		return errors.New("client is not connected")
+		return errors.New("client is not running")
 	}
 
-	// Create the message
-	msg := map[string]interface{}{
-		"type":  "input_audio_buffer.append",
-		"audio": base64.StdEncoding.EncodeToString(audio),
+	// Encode audio to base64
+	encAudio := encodeBase64(audio)
+
+	// Create audio buffer append message
+	appendMsg := AudioBufferAppendRequest{
+		Type:  "input_audio_buffer.append",
+		Audio: encAudio,
 	}
 
-	// Send through the message sender
-	return c.messageSender.SendMessage(ctx, msg)
+	// Send the message
+	return c.messageSender.SendMessage(ctx, appendMsg)
 }
 
 // CommitAudio signals that the user has finished speaking
 func (c *clientImpl) CommitAudio(ctx context.Context) error {
 	if !c.running.Load() {
-		return errors.New("client is not connected")
+		return errors.New("client is not running")
 	}
 
-	// Create the message
-	msg := map[string]string{
-		"type": "input_audio_buffer.commit",
+	// Create commit message
+	commitMsg := AudioBufferCommitRequest{
+		Type: "input_audio_buffer.commit",
 	}
 
-	// Send through the message sender
-	return c.messageSender.SendMessage(ctx, msg)
+	// Send the message
+	return c.messageSender.SendMessage(ctx, commitMsg)
 }
 
 // SendText sends a text message to the API
 func (c *clientImpl) SendText(ctx context.Context, text string) error {
 	if !c.running.Load() {
-		return errors.New("client is not connected")
+		return errors.New("client is not running")
 	}
 
-	// Create the message using conversation.item.create instead of input_text
-	msg := map[string]interface{}{
-		"type": "conversation.item.create",
-		"item": map[string]interface{}{
-			"role": "user",
-			"type": "text",
-			"content": map[string]interface{}{
-				"text": text,
+	// Create text message
+	textMsg := ConversationItemCreateRequest{
+		Type: "conversation.item.create",
+		Item: ConversationItem{
+			Role: "user",
+			Type: "text",
+			Content: ItemContent{
+				Text: text,
 			},
 		},
 	}
 
-	// Send through the message sender
-	return c.messageSender.SendMessage(ctx, msg)
+	// Send the message
+	return c.messageSender.SendMessage(ctx, textMsg)
 }
 
-// SetEventHandler registers a handler for a specific event type
+// SetEventHandler registers a handler for specific event types
 func (c *clientImpl) SetEventHandler(eventType string, handler EventHandler) {
 	c.eventProcessor.SetEventHandler(eventType, handler)
 }
 
-// ListenForEvents starts processing events from the API
+// ListenForEvents starts listening for events from the WebSocket
 func (c *clientImpl) ListenForEvents(ctx context.Context) error {
-	// This method is kept for API compatibility
-	// With the new architecture, event listening starts automatically on Connect()
 	if !c.running.Load() {
-		return errors.New("client is not connected")
+		return errors.New("client is not running")
 	}
+
+	// Add to the errgroup to track this goroutine
+	c.eg.Go(func() error {
+		return c.eventProcessor.listenLoop(ctx)
+	})
+
 	return nil
 }
 
 // UpdateSession updates the session configuration
 func (c *clientImpl) UpdateSession(ctx context.Context, config *Config) error {
 	if !c.running.Load() {
-		return errors.New("client is not connected")
+		return errors.New("client is not running")
 	}
 
-	// Build session update
-	sessionUpdate := map[string]interface{}{
-		"type":    "session.update",
-		"session": map[string]interface{}{},
+	// Create session update message
+	updateMsg := SessionUpdateRequest{
+		Type: "session.update",
 	}
 
-	session := sessionUpdate["session"].(map[string]interface{})
-
-	// Only add fields that are set
-	if config.Voice != "" {
-		session["voice"] = config.Voice
-	}
-	if len(config.Modalities) > 0 {
-		session["modalities"] = config.Modalities
-	}
-	if config.InputFormat != "" {
-		session["input_audio_format"] = config.InputFormat
-	}
-	if config.OutputFormat != "" {
-		session["output_audio_format"] = config.OutputFormat
-	}
-	if config.Instructions != "" {
-		session["instructions"] = config.Instructions
-	}
-	if config.TurnDetection != "" {
-		turnDetection := map[string]string{
-			"type": config.TurnDetection,
-		}
-		session["turn_detection"] = turnDetection
-	}
-	if config.Temperature != nil {
-		session["temperature"] = *config.Temperature
-	}
-
-	// Add new parameters
-	if config.TopP != nil {
-		session["top_p"] = *config.TopP
-	}
-	if config.PresencePenalty != nil {
-		session["presence_penalty"] = *config.PresencePenalty
-	}
-	if config.FrequencyPenalty != nil {
-		session["frequency_penalty"] = *config.FrequencyPenalty
-	}
-	if config.MaxResponseOutputTokens != nil {
-		session["max_response_output_tokens"] = *config.MaxResponseOutputTokens
-	}
-
-	// Handle InputAudioTranscription if provided
-	if config.InputAudioTranscription != nil {
-		iat := map[string]interface{}{}
-
-		if config.InputAudioTranscription.Language != "" {
-			iat["language"] = config.InputAudioTranscription.Language
-		}
-		if config.InputAudioTranscription.Type != "" {
-			iat["type"] = config.InputAudioTranscription.Type
-		}
-		iat["interim"] = config.InputAudioTranscription.Interim
-
-		if len(config.InputAudioTranscription.PhraseHints) > 0 {
-			iat["phrase_hints"] = config.InputAudioTranscription.PhraseHints
+	// Populate session fields based on provided config
+	if config != nil {
+		if config.Voice != "" {
+			updateMsg.Session.Voice = config.Voice
 		}
 
-		iat["profanity_filter"] = config.InputAudioTranscription.ProfanityFilter
-
-		if len(config.InputAudioTranscription.Redact) > 0 {
-			iat["redact"] = config.InputAudioTranscription.Redact
+		if len(config.Modalities) > 0 {
+			updateMsg.Session.Modalities = config.Modalities
 		}
 
-		iat["diarize"] = config.InputAudioTranscription.Diarize
-
-		session["input_audio_transcription"] = iat
-	}
-
-	// Handle SpeechSettings if provided
-	if config.SpeechSettings != nil {
-		ss := map[string]interface{}{}
-
-		// Voice is already set at the top level
-		if config.SpeechSettings.Speed != 0 {
-			ss["speed"] = config.SpeechSettings.Speed
+		if config.InputFormat != "" {
+			updateMsg.Session.InputAudioFormat = config.InputFormat
 		}
-		if config.SpeechSettings.Stability != 0 {
-			ss["stability"] = config.SpeechSettings.Stability
+
+		if config.OutputFormat != "" {
+			updateMsg.Session.OutputAudioFormat = config.OutputFormat
 		}
-		if config.SpeechSettings.Similarity != 0 {
-			ss["similarity"] = config.SpeechSettings.Similarity
+
+		if config.Instructions != "" {
+			updateMsg.Session.Instructions = config.Instructions
 		}
-		if config.SpeechSettings.Style != 0 {
-			ss["style"] = config.SpeechSettings.Style
+
+		if config.Temperature != nil {
+			updateMsg.Session.Temperature = config.Temperature
 		}
-		ss["presence_text"] = config.SpeechSettings.PresenceText
 
-		session["speech_settings"] = ss
+		if config.TopP != nil {
+			updateMsg.Session.TopP = config.TopP
+		}
+
+		if config.PresencePenalty != nil {
+			updateMsg.Session.PresencePenalty = config.PresencePenalty
+		}
+
+		if config.FrequencyPenalty != nil {
+			updateMsg.Session.FrequencyPenalty = config.FrequencyPenalty
+		}
+
+		if config.MaxResponseOutputTokens != nil {
+			updateMsg.Session.MaxResponseOutputTokens = config.MaxResponseOutputTokens
+		}
+
+		// Configure speech settings if provided
+		if config.SpeechSettings != nil {
+			updateMsg.Session.SpeechSettings = &SpeechSettings{
+				Voice:        config.Voice,
+				Speed:        config.SpeechSettings.Speed,
+				Stability:    config.SpeechSettings.Stability,
+				Similarity:   config.SpeechSettings.Similarity,
+				Style:        config.SpeechSettings.Style,
+				PresenceText: config.SpeechSettings.PresenceText,
+			}
+		}
+
+		// Configure audio transcription settings if provided
+		if config.InputAudioTranscription != nil {
+			updateMsg.Session.InputAudioTranscription = &InputAudioTranscriptionConfig{
+				Language:        config.InputAudioTranscription.Language,
+				Type:            config.InputAudioTranscription.Type,
+				Interim:         config.InputAudioTranscription.Interim,
+				PhraseHints:     config.InputAudioTranscription.PhraseHints,
+				ProfanityFilter: config.InputAudioTranscription.ProfanityFilter,
+				Redact:          config.InputAudioTranscription.Redact,
+				Diarize:         config.InputAudioTranscription.Diarize,
+			}
+		}
+
+		// Configure turn detection
+		if config.TurnDetection != "" {
+			updateMsg.Session.TurnDetection = &TurnDetectionConfig{
+				Type: config.TurnDetection,
+			}
+		}
+
+		// Configure tools if provided
+		if config.Tools != nil && len(config.Tools) > 0 {
+			updateMsg.Session.Tools = config.Tools
+		}
+
+		if config.ToolChoice != "" {
+			updateMsg.Session.ToolChoice = config.ToolChoice
+		}
 	}
 
-	// Handle Tools if provided
-	if config.Tools != nil && len(config.Tools) > 0 {
-		session["tools"] = config.Tools
-	}
-
-	if config.ToolChoice != "" {
-		session["tool_choice"] = config.ToolChoice
-	}
-
-	if config.Logger != nil {
-		// Don't actually send this to the API
-		c.SetLogger(*config.Logger)
-	}
-
-	// Send through the message sender
-	return c.messageSender.SendMessage(ctx, sessionUpdate)
+	// Send the update message
+	return c.messageSender.SendMessage(ctx, updateMsg)
 }
 
 // GetResponse returns the current response text and audio
@@ -476,681 +401,7 @@ func (c *clientImpl) GetResponse() (string, []byte) {
 	return c.responseManager.GetResponse()
 }
 
-// ================== Connection Manager Implementation ==================
-
-// connect establishes a WebSocket connection
-func (cm *connectionManager) connect(ctx context.Context) error {
-	cm.logger.Info().
-		Str("model", cm.client.model).
-		Str("url", BaseURL).
-		Msg("Connecting to OpenAI Realtime API")
-
-	// Create a context with timeout
-	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// Prepare dialer and headers
-	dialer := websocket.DefaultDialer
-	url := fmt.Sprintf("%s?model=%s", BaseURL, cm.client.model)
-
-	headers := http.Header{}
-	headers.Add("Authorization", "Bearer "+cm.client.apiKey)
-	headers.Add("OpenAI-Beta", "realtime=v1")
-
-	cm.logger.Debug().Str("url", url).Msg("Dialing WebSocket")
-
-	// Establish connection
-	conn, resp, err := dialer.DialContext(connectCtx, url, headers)
-	if err != nil {
-		if resp != nil {
-			body, readErr := io.ReadAll(resp.Body)
-			if readErr == nil {
-				cm.logger.Error().
-					Err(err).
-					Int("status_code", resp.StatusCode).
-					Str("response_body", string(body)).
-					Msg("Failed to connect to OpenAI Realtime API")
-			} else {
-				cm.logger.Error().
-					Err(err).
-					Int("status_code", resp.StatusCode).
-					Msg("Failed to connect to OpenAI Realtime API")
-			}
-		} else {
-			cm.logger.Error().Err(err).Msg("Failed to connect to OpenAI Realtime API")
-		}
-		return fmt.Errorf("failed to connect to OpenAI Realtime API: %w", err)
-	}
-
-	// Store the connection
-	cm.connMutex.Lock()
-	cm.conn = conn
-	cm.connMutex.Unlock()
-
-	// Configure WebSocket handlers
-	conn.SetPingHandler(func(appData string) error {
-		cm.logger.Debug().Str("data", appData).Msg("Received ping, sending pong")
-		err := conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
-		if err != nil {
-			cm.logger.Error().Err(err).Msg("Failed to send pong")
-		}
-		return nil
-	})
-
-	// Set initial read deadline for session establishment
-	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-
-	// Create channel for session establishment signal
-	sessionCreated := make(chan struct{})
-
-	// Handle incoming messages during connection phase
-	go func() {
-		defer conn.SetReadDeadline(time.Time{}) // Reset deadline
-
-		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				cm.logger.Error().Err(err).Msg("Error reading initial messages")
-				return
-			}
-
-			// Check for session.created event
-			var eventType struct {
-				Type string `json:"type"`
-			}
-			if err := json.Unmarshal(message, &eventType); err != nil {
-				cm.logger.Error().Err(err).Msg("Failed to parse event type")
-				continue
-			}
-
-			// Process session.created event
-			if eventType.Type == EventSessionCreated {
-				var sessionEvent SessionCreatedEvent
-				if err := json.Unmarshal(message, &sessionEvent); err != nil {
-					cm.logger.Error().Err(err).Msg("Failed to parse session.created event")
-					continue
-				}
-
-				// Store session ID
-				cm.client.sessionID.Store(sessionEvent.Session.ID)
-				cm.logger.Info().
-					Str("session_id", sessionEvent.Session.ID).
-					Str("model", sessionEvent.Session.Model).
-					Str("voice", sessionEvent.Session.Voice).
-					Msg("Session created")
-
-				// Signal session creation
-				close(sessionCreated)
-
-				// Add to event processing channel
-				cm.client.eventProcessor.ProcessRawEvent(message)
-			} else {
-				// Process other events
-				cm.client.eventProcessor.ProcessRawEvent(message)
-			}
-		}
-	}()
-
-	// Wait for session creation or timeout
-	select {
-	case <-sessionCreated:
-		cm.logger.Debug().Msg("Session created successfully")
-	case <-connectCtx.Done():
-		// Close connection on timeout
-		conn.Close()
-		return errors.New("timed out waiting for session.created event")
-	}
-
-	cm.logger.Debug().Msg("Connection established successfully")
-	return nil
-}
-
-// Start begins the connection manager operation
-func (cm *connectionManager) Start(ctx context.Context) error {
-	cm.logger.Debug().Msg("Starting connection manager")
-
-	// Start ping ticker
-	cm.pingTicker = time.NewTicker(PingInterval)
-	defer cm.pingTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			cm.logger.Debug().Msg("Connection manager stopping due to context cancellation")
-			return nil
-
-		case <-cm.pingTicker.C:
-			// Send ping
-			cm.connMutex.RLock()
-			if cm.conn != nil {
-				cm.logger.Debug().Msg("Sending ping to keep connection alive")
-				err := cm.conn.WriteControl(
-					websocket.PingMessage,
-					[]byte{},
-					time.Now().Add(5*time.Second),
-				)
-				cm.connMutex.RUnlock()
-
-				if err != nil {
-					cm.logger.Error().Err(err).Msg("Failed to send ping")
-					// Try to reconnect on ping failure
-					// Note: Implement reconnection logic here if needed
-				}
-			} else {
-				cm.connMutex.RUnlock()
-				cm.logger.Warn().Msg("Connection is nil, cannot send ping")
-			}
-		}
-	}
-}
-
-// Stop halts the connection manager operation
-func (cm *connectionManager) Stop(ctx context.Context) error {
-	cm.logger.Debug().Msg("Stopping connection manager")
-
-	// Stop ping ticker if running
-	if cm.pingTicker != nil {
-		cm.pingTicker.Stop()
-	}
-
-	// Connection closing is handled by the main Close method
-	return nil
-}
-
-// ================== Message Sender Implementation ==================
-
-// SendMessage queues a message to be sent
-func (ms *messageSender) SendMessage(ctx context.Context, msg interface{}) error {
-	select {
-	case ms.msgQueue <- msg:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		// Queue is full, this is usually a sign of a bigger problem
-		return errors.New("message queue is full, cannot send message")
-	}
-}
-
-// Start begins the message sender operation
-func (ms *messageSender) Start(ctx context.Context) error {
-	ms.logger.Debug().Msg("Starting message sender")
-
-	for {
-		select {
-		case <-ctx.Done():
-			ms.logger.Debug().Msg("Message sender stopping due to context cancellation")
-			return nil
-
-		case msg, ok := <-ms.msgQueue:
-			if !ok {
-				ms.logger.Debug().Msg("Message queue closed, stopping sender")
-				return nil
-			}
-
-			// Send the message
-			if err := ms.sendJSONMessage(msg); err != nil {
-				ms.logger.Error().Err(err).Interface("message", msg).Msg("Failed to send message")
-				// Continue processing other messages
-			}
-		}
-	}
-}
-
-// Stop halts the message sender operation
-func (ms *messageSender) Stop(ctx context.Context) error {
-	ms.logger.Debug().Msg("Stopping message sender")
-	// No specific cleanup needed as the main loop will terminate due to context cancellation
-	return nil
-}
-
-// sendJSONMessage sends a JSON message to the WebSocket with logging
-func (ms *messageSender) sendJSONMessage(msg interface{}) error {
-	// Marshal to JSON for logging
-	jsonBytes, err := json.Marshal(msg)
-	if err != nil {
-		ms.logger.Error().Err(err).Msg("Failed to marshal message to JSON")
-		return err
-	}
-
-	// Log the outgoing message
-	ms.logger.Debug().
-		Str("type", fmt.Sprintf("%T", msg)).
-		RawJSON("body", jsonBytes).
-		Int("size", len(jsonBytes)).
-		Msg("Sending WebSocket message")
-
-	// Acquire connection lock for sending
-	ms.connMutex.RLock()
-	defer ms.connMutex.RUnlock()
-
-	// Check if connection is available
-	if ms.conn == nil {
-		return errors.New("not connected")
-	}
-
-	// Send the message
-	return ms.conn.WriteJSON(msg)
-}
-
-// ================== Event Processor Implementation ==================
-
-// SetEventHandler registers a handler for an event type
-func (ep *eventProcessor) SetEventHandler(eventType string, handler EventHandler) {
-	ep.handlersMutex.Lock()
-	defer ep.handlersMutex.Unlock()
-
-	ep.eventHandlers[eventType] = append(ep.eventHandlers[eventType], handler)
-}
-
-// ProcessRawEvent processes a raw WebSocket message
-func (ep *eventProcessor) ProcessRawEvent(data []byte) {
-	// Parse the event type
-	var eventMap map[string]interface{}
-	if err := json.Unmarshal(data, &eventMap); err != nil {
-		ep.logger.Error().Err(err).Str("data", string(data)).Msg("Failed to parse message JSON")
-		return
-	}
-
-	// Extract the event type
-	eventType, ok := eventMap["type"].(string)
-	if !ok {
-		ep.logger.Error().Str("data", string(data)).Msg("Message missing 'type' field")
-		return
-	}
-
-	// Create the appropriate event object
-	event, err := ep.createEventObject(eventType, data)
-	if err != nil {
-		ep.logger.Error().Err(err).Str("event_type", eventType).Msg("Error creating event object")
-		return
-	}
-
-	// Send event to channel for processing
-	select {
-	case ep.eventChan <- event:
-		// Event queued successfully
-	default:
-		ep.logger.Warn().Str("event_type", eventType).Msg("Event channel full, dropping event")
-	}
-}
-
-// createEventObject creates the appropriate event object based on type
-func (ep *eventProcessor) createEventObject(eventType string, data []byte) (Event, error) {
-	var err error
-	var event Event
-
-	switch eventType {
-	case EventSessionCreated:
-		var sessionEvent SessionCreatedEvent
-		if err = json.Unmarshal(data, &sessionEvent); err != nil {
-			return nil, err
-		}
-		sessionEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &sessionEvent
-
-	case EventSessionUpdated:
-		var sessionEvent SessionUpdatedEvent
-		if err = json.Unmarshal(data, &sessionEvent); err != nil {
-			return nil, err
-		}
-		sessionEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &sessionEvent
-
-	case EventConversationItemCreated:
-		var itemEvent ConversationItemCreatedEvent
-		if err = json.Unmarshal(data, &itemEvent); err != nil {
-			return nil, err
-		}
-		itemEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &itemEvent
-
-	case EventConversationItemInputAudioTranscriptionCompleted:
-		var transcriptionEvent TranscriptionCompletedEvent
-		if err = json.Unmarshal(data, &transcriptionEvent); err != nil {
-			return nil, err
-		}
-		transcriptionEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &transcriptionEvent
-
-		// For logging convenience, log the transcription
-		transcript := transcriptionEvent.Transcript
-		if transcript != "" {
-			ep.logger.Debug().Str("transcript", transcript).Msg("Transcription received")
-		}
-
-	case EventResponseCreated:
-		var responseEvent ResponseCreatedEvent
-		if err = json.Unmarshal(data, &responseEvent); err != nil {
-			return nil, err
-		}
-		responseEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &responseEvent
-
-		// Store the current response ID and reset buffers
-		ep.client.responseManager.SetResponseID(responseEvent.Response.ID)
-		ep.client.responseManager.ResetResponse()
-
-	case EventResponseContentPartAdded:
-		var contentEvent ContentPartAddedEvent
-		if err = json.Unmarshal(data, &contentEvent); err != nil {
-			return nil, err
-		}
-		contentEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &contentEvent
-
-		// For logging convenience, extract the content text
-		text := contentEvent.Part.Text
-		if text != "" {
-			ep.logger.Debug().Str("text", text).Msg("Content received")
-
-			// Append to the response buffer
-			ep.client.responseManager.AppendResponseText(contentEvent.ResponseID, text)
-		}
-
-	case EventResponseContentPartDone:
-		var doneEvent ContentPartDoneEvent
-		if err = json.Unmarshal(data, &doneEvent); err != nil {
-			return nil, err
-		}
-		doneEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &doneEvent
-
-	case EventResponseAudioDelta:
-		var audioEvent AudioDeltaEvent
-		if err = json.Unmarshal(data, &audioEvent); err != nil {
-			return nil, err
-		}
-		audioEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &audioEvent
-
-		// Decode and store audio
-		if audioEvent.Delta != "" {
-			audioData, err := base64.StdEncoding.DecodeString(audioEvent.Delta)
-			if err != nil {
-				ep.logger.Warn().Err(err).Msg("Failed to decode audio data")
-			} else {
-				ep.client.responseManager.AppendResponseAudio(audioEvent.ResponseID, audioData)
-			}
-		}
-
-	case EventResponseAudioDone:
-		var doneEvent AudioDoneEvent
-		if err = json.Unmarshal(data, &doneEvent); err != nil {
-			return nil, err
-		}
-		doneEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &doneEvent
-
-	case EventResponseDone:
-		var doneEvent ResponseDoneEvent
-		if err = json.Unmarshal(data, &doneEvent); err != nil {
-			return nil, err
-		}
-		doneEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &doneEvent
-
-		// Log token usage
-		ep.logger.Debug().
-			Int("input_tokens", doneEvent.Response.Usage.InputTokens).
-			Int("output_tokens", doneEvent.Response.Usage.OutputTokens).
-			Int("audio_tokens", doneEvent.Response.Usage.InputTokenDetails.AudioTokens).
-			Int("cached_tokens", doneEvent.Response.Usage.InputTokenDetails.CachedTokens).
-			Msg("Response completed")
-
-	case EventError:
-		var errorEvent ErrorEvent
-		if err = json.Unmarshal(data, &errorEvent); err != nil {
-			return nil, err
-		}
-		errorEvent.BaseEvent = NewBaseEvent(eventType, data)
-		event = &errorEvent
-
-		// Log the error for convenience
-		ep.logger.Error().
-			Str("error_type", errorEvent.Error.Type).
-			Str("error_code", errorEvent.Error.Code).
-			Str("error_message", errorEvent.Error.Message).
-			Msg("Received error event")
-
-	default:
-		// For unknown events, just create a basic event wrapper
-		event = &genericEvent{
-			eventType: eventType,
-			data:      data,
-		}
-	}
-
-	return event, nil
-}
-
-// Start begins the event processor operation
-func (ep *eventProcessor) Start(ctx context.Context) error {
-	ep.logger.Debug().Msg("Starting event processor")
-
-	// Start the WebSocket listener
-	ep.client.eg.Go(func() error {
-		return ep.listenLoop(ctx)
-	})
-
-	// Process events from the channel
-	for {
-		select {
-		case <-ctx.Done():
-			ep.logger.Debug().Msg("Event processor stopping due to context cancellation")
-			return nil
-
-		case event, ok := <-ep.eventChan:
-			if !ok {
-				ep.logger.Debug().Msg("Event channel closed, stopping processor")
-				return nil
-			}
-
-			// Process the event
-			if err := ep.processEvent(event); err != nil {
-				ep.logger.Error().Err(err).Str("event_type", event.Type()).Msg("Error processing event")
-			}
-		}
-	}
-}
-
-// Stop halts the event processor operation
-func (ep *eventProcessor) Stop(ctx context.Context) error {
-	ep.logger.Debug().Msg("Stopping event processor")
-	// No specific cleanup needed as the main loop will terminate due to context cancellation
-	return nil
-}
-
-// listenLoop reads messages from the WebSocket connection
-func (ep *eventProcessor) listenLoop(ctx context.Context) error {
-	ep.logger.Debug().Msg("Starting WebSocket listen loop")
-
-	defer ep.logger.Debug().Msg("WebSocket listen loop ended")
-
-	for {
-		// Check if context is done
-		select {
-		case <-ctx.Done():
-			ep.logger.Debug().Msg("Context cancelled, stopping WebSocket listen loop")
-			return nil
-		default:
-			// Continue
-		}
-
-		// Get current connection
-		ep.connMutex.RLock()
-		conn := ep.conn
-		ep.connMutex.RUnlock()
-
-		// Check if connection is closed
-		if conn == nil {
-			ep.logger.Error().Msg("WebSocket connection is nil, stopping listen loop")
-			return errors.New("connection is nil")
-		}
-
-		// Read message from WebSocket with a timeout
-		conn.SetReadDeadline(time.Now().Add(PongWait))
-		messageType, message, err := conn.ReadMessage()
-
-		// Reset the read deadline
-		conn.SetReadDeadline(time.Time{})
-
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				ep.logger.Info().Err(err).Msg("WebSocket closed normally")
-			} else if websocket.IsUnexpectedCloseError(err) {
-				ep.logger.Error().Err(err).Msg("WebSocket closed unexpectedly")
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				ep.logger.Warn().Msg("WebSocket read timeout, continuing")
-				continue
-			} else {
-				ep.logger.Error().Err(err).Msg("Error reading from WebSocket")
-			}
-			return err
-		}
-
-		// Log received message details
-		if len(message) > 1000 {
-			// For larger messages that might contain audio data, truncate the logging
-			ep.logger.Debug().
-				Int("type", messageType).
-				Int("size", len(message)).
-				Str("preview", string(message[:100])+"...").
-				Msg("Received WebSocket message")
-		} else {
-			// For smaller messages, log the full content for debug purposes
-			ep.logger.Debug().
-				Int("type", messageType).
-				Int("size", len(message)).
-				RawJSON("body", message).
-				Msg("Received WebSocket message")
-		}
-
-		// Process the raw event
-		ep.ProcessRawEvent(message)
-	}
-}
-
-// processEvent handles an event and dispatches it to registered handlers
-func (ep *eventProcessor) processEvent(event Event) error {
-	eventType := event.Type()
-
-	ep.logger.Debug().
-		Str("event_type", eventType).
-		Str("event", string(event.RawData())).
-		Msg("Processing event")
-
-	// Find handlers for this event type
-	ep.handlersMutex.RLock()
-	handlers, exists := ep.eventHandlers[eventType]
-	ep.handlersMutex.RUnlock()
-
-	// Call registered handlers
-	if exists && len(handlers) > 0 {
-		for _, handler := range handlers {
-			if err := handler(event); err != nil {
-				ep.logger.Error().
-					Err(err).
-					Str("event_type", eventType).
-					Msg("Error in event handler")
-			}
-		}
-	} else {
-		// No handlers found, use default handler for common events
-		if err := ep.handleDefaultEvent(event); err != nil {
-			ep.logger.Error().
-				Err(err).
-				Str("event_type", eventType).
-				Msg("Error in default event handler")
-		}
-	}
-
-	return nil
-}
-
-// handleDefaultEvent provides default handling for common events
-func (ep *eventProcessor) handleDefaultEvent(event Event) error {
-	switch event.Type() {
-	case EventSessionCreated:
-		if e, ok := event.(*SessionCreatedEvent); ok {
-			ep.client.sessionID.Store(e.Session.ID)
-		}
-
-	case EventResponseDone:
-		if e, ok := event.(*ResponseDoneEvent); ok {
-			ep.logger.Info().
-				Str("response_id", e.Response.ID).
-				Int("input_tokens", e.Response.Usage.InputTokens).
-				Int("output_tokens", e.Response.Usage.OutputTokens).
-				Int("audio_tokens", e.Response.Usage.InputTokenDetails.AudioTokens).
-				Msg("Response completed")
-
-			// Reset for next response
-			ep.client.responseManager.ResetResponse()
-		}
-
-	case EventError:
-		if e, ok := event.(*ErrorEvent); ok {
-			ep.logger.Error().
-				Str("type", e.Error.Type).
-				Str("code", e.Error.Code).
-				Str("message", e.Error.Message).
-				Str("param", e.Error.Param).
-				Msg("Received error event from API")
-		}
-	}
-
-	return nil
-}
-
-// ================== Response Manager Implementation ==================
-
-// SetResponseID sets the current response ID
-func (rm *responseManager) SetResponseID(responseID string) {
-	rm.currentResponseID.Store(responseID)
-	rm.responseMutex.Lock()
-	rm.currentResponseText.Store("")
-	rm.currentResponseAudio = nil
-	rm.responseMutex.Unlock()
-}
-
-// AppendResponseText appends text to the current response
-func (rm *responseManager) AppendResponseText(responseID string, text string) {
-	currentID := rm.currentResponseID.Load().(string)
-	if currentID == responseID {
-		currentText := rm.currentResponseText.Load().(string)
-		rm.currentResponseText.Store(currentText + text)
-	}
-}
-
-// AppendResponseAudio appends audio to the current response
-func (rm *responseManager) AppendResponseAudio(responseID string, audio []byte) {
-	currentID := rm.currentResponseID.Load().(string)
-	if currentID == responseID {
-		rm.responseMutex.Lock()
-		rm.currentResponseAudio = append(rm.currentResponseAudio, audio...)
-		rm.responseMutex.Unlock()
-	}
-}
-
-// ResetResponse resets the response buffer
-func (rm *responseManager) ResetResponse() {
-	rm.currentResponseID.Store("")
-	rm.currentResponseText.Store("")
-	rm.responseMutex.Lock()
-	rm.currentResponseAudio = nil
-	rm.responseMutex.Unlock()
-}
-
-// GetResponse returns the current response text and audio
-func (rm *responseManager) GetResponse() (string, []byte) {
-	text := rm.currentResponseText.Load().(string)
-
-	rm.responseMutex.Lock()
-	// Create a copy of the audio to avoid race conditions
-	audioBytes := make([]byte, len(rm.currentResponseAudio))
-	copy(audioBytes, rm.currentResponseAudio)
-	rm.responseMutex.Unlock()
-
-	return text, audioBytes
+// Helper function to encode audio data in base64
+func encodeBase64(data []byte) string {
+	return EncodeBase64(data)
 }
