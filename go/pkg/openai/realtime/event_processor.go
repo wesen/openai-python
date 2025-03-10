@@ -6,21 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
+	"sync/atomic"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
 
 // eventProcessor handles processing events from the WebSocket
 type eventProcessor struct {
 	client        *clientImpl
-	conn          *websocket.Conn
-	connMutex     *sync.RWMutex // Points to the same mutex as connectionManager
 	eventChan     chan Event
 	eventHandlers map[string][]EventHandler
 	handlersMutex sync.RWMutex
 	logger        zerolog.Logger
+	running       atomic.Bool
 }
 
 // SetEventHandler registers a handler for a specific event type
@@ -34,39 +32,44 @@ func (ep *eventProcessor) SetEventHandler(eventType string, handler EventHandler
 	ep.eventHandlers[eventType] = append(ep.eventHandlers[eventType], handler)
 }
 
-// ProcessRawEvent processes a raw event from the WebSocket
+// ProcessRawEvent processes a raw WebSocket message into an event
 func (ep *eventProcessor) ProcessRawEvent(data []byte) {
-	// Log the raw event data
-	ep.logger.Debug().RawJSON("raw_event", data).Msg("Processing raw event")
-
-	// First, just try to extract the type field
-	var eventTypeExtract struct {
+	// First, determine the event type
+	var rawEvent struct {
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(data, &eventTypeExtract); err != nil {
-		ep.logger.Error().Err(err).Msg("Failed to extract event type")
+	if err := json.Unmarshal(data, &rawEvent); err != nil {
+		ep.logger.Error().Err(err).Msg("Failed to unmarshal event type")
 		return
 	}
 
-	eventType := eventTypeExtract.Type
+	eventType := rawEvent.Type
+	ep.logger.Debug().Str("event_type", eventType).RawJSON("raw_event", data).Msg("Received event JSON")
 
-	// Create appropriate event object based on the event type
+	// Create the specific event object based on type
 	event, err := ep.createEventObject(eventType, data)
 	if err != nil {
-		ep.logger.Error().Err(err).
-			Str("event_type", eventType).
-			RawJSON("raw_event", data).
-			Msg("Failed to create event object")
+		ep.logger.Error().Err(err).Str("event_type", eventType).Msg("Failed to create event object")
 		return
 	}
 
-	// Queue event for processing
-	select {
-	case ep.eventChan <- event:
-		// Event queued successfully
-	default:
-		ep.logger.Warn().Str("event_type", eventType).Msg("Event channel full, dropping event")
+	// Handle default events that all clients should process
+	if err := ep.handleDefaultEvent(event); err != nil {
+		ep.logger.Error().Err(err).Str("event_type", eventType).Msg("Error handling default event")
 	}
+
+	// Send the event to the event channel if running
+	if ep.running.Load() {
+		select {
+		case ep.eventChan <- event:
+			// Event sent successfully
+		default:
+			ep.logger.Warn().Str("event_type", eventType).Msg("Event channel full, dropping event")
+		}
+	}
+
+	// Process the event with registered handlers
+	ep.processEvent(event)
 }
 
 // createEventObject creates the appropriate event object based on type
@@ -232,74 +235,56 @@ func (ep *eventProcessor) createEventObject(eventType string, data []byte) (Even
 	return event, nil
 }
 
-// Start begins the event processor operation
+// Start begins processing events
 func (ep *eventProcessor) Start(ctx context.Context) error {
-	// Start the event processing goroutine
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				ep.logger.Debug().Msg("Event processor stopping")
-				return
-			case event := <-ep.eventChan:
-				if err := ep.processEvent(event); err != nil {
-					ep.logger.Error().Err(err).Str("event_type", event.Type()).Msg("Error processing event")
-				}
-			}
-		}
-	}()
+	if ep.running.Load() {
+		return nil // Already running
+	}
 
+	// Create a new event channel if needed
+	if ep.eventChan == nil {
+		ep.eventChan = make(chan Event, 100)
+	}
+
+	// Start a goroutine to process events from the channel
+	ep.client.eg.Go(func() error {
+		defer ep.logger.Debug().Msg("Event processor stopping")
+		return ep.processEvents(ctx)
+	})
+
+	ep.running.Store(true)
 	return nil
 }
 
-// Stop ends the event processor operation
-func (ep *eventProcessor) Stop(ctx context.Context) error {
-	// Just rely on context cancellation to stop the goroutine
-	return nil
-}
-
-// listenLoop listens for messages from the WebSocket
-func (ep *eventProcessor) listenLoop(ctx context.Context) error {
+// processEvents is the main event processing loop
+func (ep *eventProcessor) processEvents(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-			// Ensure we have a connection
-			ep.connMutex.RLock()
-			conn := ep.conn
-			ep.connMutex.RUnlock()
 
-			if conn == nil {
-				ep.logger.Debug().Msg("No connection for listening")
-				return fmt.Errorf("no active connection")
+		case event, ok := <-ep.eventChan:
+			if !ok {
+				ep.logger.Debug().Msg("Event channel closed")
+				return nil
 			}
 
-			// Set a deadline for reading
-			err := conn.SetReadDeadline(time.Now().Add(PongWait))
-			if err != nil {
-				ep.logger.Warn().Err(err).Msg("Error setting read deadline")
+			if err := ep.processEvent(event); err != nil {
+				ep.logger.Error().Err(err).Str("event_type", event.Type()).Msg("Error processing event")
 			}
-
-			// Read message
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				// Check if it's a normal close
-				if websocket.IsCloseError(err,
-					websocket.CloseNormalClosure,
-					websocket.CloseGoingAway,
-					websocket.CloseAbnormalClosure) {
-					ep.logger.Info().Msg("WebSocket closed normally")
-				} else {
-					ep.logger.Error().Err(err).Msg("Error reading from WebSocket")
-				}
-				return err
-			}
-
-			// Process the received message
-			ep.ProcessRawEvent(message)
 		}
 	}
+}
+
+// Stop terminates event processing
+func (ep *eventProcessor) Stop(ctx context.Context) error {
+	if !ep.running.Load() {
+		return nil
+	}
+
+	ep.running.Store(false)
+	ep.logger.Debug().Msg("Event processor stopping")
+	return nil
 }
 
 // processEvent processes a parsed event

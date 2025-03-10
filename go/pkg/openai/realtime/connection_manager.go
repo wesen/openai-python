@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,10 +34,17 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 	dialer := websocket.Dialer{
 		Proxy:            http.ProxyFromEnvironment,
 		HandshakeTimeout: ConnectionTimeout,
+		// Disable compression by default to avoid potential fragmentation issues
+		EnableCompression: false,
 	}
 
 	// Add query params
 	url := fmt.Sprintf("%s?model=%s", BaseURL, cm.client.model)
+
+	cm.logger.Debug().
+		Str("url", url).
+		Str("authorization", "Bearer "+strings.Repeat("*", 4)).
+		Msg("Establishing WebSocket connection")
 
 	// Establish connection
 	conn, resp, err := dialer.DialContext(ctx, url, headers)
@@ -75,9 +83,17 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 	// Configure WebSocket behaviors
 	conn.SetPingHandler(nil) // Use default Ping handler
 	conn.SetPongHandler(func(string) error {
+		cm.logger.Debug().Msg("Received pong frame")
 		// Reset the read deadline when we get a pong
 		return conn.SetReadDeadline(time.Now().Add(PongWait))
 	})
+
+	// Disable write compression to avoid fragmentation issues
+	conn.EnableWriteCompression(false)
+
+	cm.logger.Debug().
+		Bool("compression_enabled", false).
+		Msg("WebSocket connection established with configuration")
 
 	// Start regular pings
 	cm.pingTicker = time.NewTicker(PingInterval)

@@ -145,3 +145,47 @@ Fixed a nil pointer dereference in the NewClient function that was causing the c
 - Improved debug logging to handle the case where the context is not yet canceled
 
 This fixes the panic that occurred when running the voice assistant with text input. 
+
+## Fixed WebSocket Protocol Handling for Frame Fragmentation
+
+Enhanced the WebSocket protocol handling to address "continuation after FIN" errors that were causing connection failures:
+
+- Disabled WebSocket compression to avoid fragmentation issues
+- Added improved logging for WebSocket protocol errors to help diagnose connection issues
+- Enhanced error handling specifically for fragmentation-related protocol errors
+- Added more detailed connection logging to provide better diagnostics for WebSocket connectivity
+- Fixed potential handling of fragmented frames by ensuring proper WebSocket configuration
+
+These changes help prevent and diagnose WebSocket protocol errors that were causing the client to disconnect prematurely.
+
+### Changes
+
+- Disabled compression in the WebSocket dialer configuration
+- Added specific error detection for "continuation after FIN" and other protocol errors
+- Enhanced logging to include WebSocket message type and size information
+- Improved WebSocket connection establishment with better configuration
+- Added more detailed error logging to help diagnose connection issues
+
+## Refactored WebSocket Connection Handling Architecture
+
+Redesigned the WebSocket connection handling to improve reliability and reduce complexity:
+
+- Merged connectionManager and messageSender into a single unified connectionHandler component
+- Removed unnecessary mutex synchronization by adopting a clear ownership model for the WebSocket connection
+- Improved message routing between components with a cleaner event flow design
+- Fixed WebSocket protocol handling issues that caused "continuation after FIN" errors
+- Enhanced WebSocket connection stability with improved frame handling
+- Reduced goroutine count while maintaining concurrency benefits
+
+These changes simplify the codebase, make it more maintainable, and fix issues with WebSocket fragmentation.
+
+### Changes
+
+- Created new connectionHandler component that combines the functionality of connectionManager and messageSender
+- Modified event processor to work with the connectionHandler instead of accessing the WebSocket directly
+- Updated client implementation to use the unified architecture
+- Added better WebSocket protocol error detection with specific error messages
+- Improved WebSocket connection settings to prevent fragmentation issues
+- Enhanced logging to provide more context for WebSocket errors
+
+# Changelog 

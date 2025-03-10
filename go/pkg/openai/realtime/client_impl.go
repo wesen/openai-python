@@ -29,8 +29,7 @@ type clientImpl struct {
 	logger zerolog.Logger
 
 	// Components
-	connManager     *connectionManager
-	messageSender   *messageSender
+	connHandler     *connectionHandler
 	eventProcessor  *eventProcessor
 	responseManager *responseManager
 
@@ -77,8 +76,7 @@ func (c *clientImpl) SetLogger(logger zerolog.Logger) {
 	c.logger = logger
 
 	// Update logger in all components
-	c.connManager.logger = logger.With().Str("component", "connection_manager").Logger()
-	c.messageSender.logger = logger.With().Str("component", "message_sender").Logger()
+	c.connHandler.logger = logger.With().Str("component", "connection_handler").Logger()
 	c.eventProcessor.logger = logger.With().Str("component", "event_processor").Logger()
 	c.responseManager.logger = logger.With().Str("component", "response_manager").Logger()
 }
@@ -91,7 +89,7 @@ func (c *clientImpl) Connect(ctx context.Context) error {
 	}
 
 	// First initialize the connection
-	if err := c.connManager.connect(ctx); err != nil {
+	if err := c.connHandler.Connect(ctx); err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
 
@@ -117,33 +115,17 @@ func (c *clientImpl) Connect(ctx context.Context) error {
 
 // initializeComponents initializes all client components
 func (c *clientImpl) initializeComponents() {
-	// Create connection manager
-	c.connManager = &connectionManager{
-		client: c,
-		logger: c.logger.With().Str("component", "connection_manager").Logger(),
-	}
+	c.logger.Debug().Msg("Initializing components")
 
-	// Create message sender (shares connection mutex with connection manager)
-	c.messageSender = &messageSender{
-		client:    c,
-		connMutex: &c.connManager.connMutex,
-		msgQueue:  make(chan interface{}, 100),
-		logger:    c.logger.With().Str("component", "message_sender").Logger(),
-	}
+	// Create the connection handler (replaces connectionManager and messageSender)
+	c.connHandler = newConnectionHandler(c)
 
-	// Create event processor (shares connection mutex with connection manager)
-	c.eventProcessor = &eventProcessor{
-		client:    c,
-		connMutex: &c.connManager.connMutex,
-		eventChan: make(chan Event, 100),
-		logger:    c.logger.With().Str("component", "event_processor").Logger(),
-	}
+	// Create the event processor and response manager
+	c.eventProcessor = newEventProcessor(c)
+	c.responseManager = newResponseManager(c)
 
-	// Create response manager
-	c.responseManager = &responseManager{
-		client: c,
-		logger: c.logger.With().Str("component", "response_manager").Logger(),
-	}
+	// Set up bidirectional references
+	c.connHandler.SetEventProcessor(c.eventProcessor)
 
 	// Initialize atomic values
 	c.sessionID.Store("")
@@ -153,71 +135,68 @@ func (c *clientImpl) initializeComponents() {
 
 // startComponents starts all client components
 func (c *clientImpl) startComponents() error {
-	// Update connection references in components after connection is established
-	c.connManager.connMutex.RLock()
-	conn := c.connManager.conn
-	c.connManager.connMutex.RUnlock()
+	c.logger.Debug().Msg("Starting components")
 
-	if conn == nil {
-		return errors.New("no active connection")
+	// Connect using the connection handler
+	if err := c.connHandler.Connect(c.ctx); err != nil {
+		c.logger.Error().Err(err).Msg("Failed to connect")
+		return err
 	}
 
-	// Update connection reference in components
-	c.messageSender.conn = conn
-	c.eventProcessor.conn = conn
-
-	// Start each component
-	if err := c.connManager.Start(c.ctx); err != nil {
-		return fmt.Errorf("failed to start connection manager: %w", err)
-	}
-
-	if err := c.messageSender.Start(c.ctx); err != nil {
-		return fmt.Errorf("failed to start message sender: %w", err)
-	}
-
+	// Start the event processor
 	if err := c.eventProcessor.Start(c.ctx); err != nil {
-		return fmt.Errorf("failed to start event processor: %w", err)
+		c.logger.Error().Err(err).Msg("Failed to start event processor")
+		return err
 	}
 
+	c.running.Store(true)
 	return nil
 }
 
 // Close terminates the WebSocket connection
 func (c *clientImpl) Close(ctx context.Context) error {
+	c.logger.Debug().Msg("Closing client")
+
 	if !c.running.Load() {
-		return nil // Already closed
+		c.logger.Debug().Msg("Client already closed")
+		return nil
 	}
 
-	// Set running to false first to prevent new operations
-	c.running.Store(false)
-
-	// Cancel the client context to stop all operations
+	// Cancel the context to signal all components to stop
 	c.cancelFunc()
 
-	// Stop components in reverse order
-	var firstErr error
-
-	// Stop event processor
-	if err := c.eventProcessor.Stop(ctx); err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("failed to stop event processor: %w", err)
+	// Close the connection handler
+	if err := c.connHandler.Close(ctx); err != nil {
+		c.logger.Error().Err(err).Msg("Error closing connection handler")
 	}
 
-	// Stop message sender
-	if err := c.messageSender.Stop(ctx); err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("failed to stop message sender: %w", err)
+	// Stop the event processor
+	if err := c.eventProcessor.Stop(ctx); err != nil {
+		c.logger.Error().Err(err).Msg("Error stopping event processor")
 	}
 
-	// Stop connection manager (closes the connection)
-	if err := c.connManager.Stop(ctx); err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("failed to stop connection manager: %w", err)
+	// Wait for the error group to complete with a timeout
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		err := c.eg.Wait()
+		if err != nil && !errors.Is(err, context.Canceled) {
+			c.logger.Error().Err(err).Msg("Error in goroutine group")
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		c.logger.Debug().Msg("All goroutines exited cleanly")
+	case <-waitCtx.Done():
+		c.logger.Warn().Msg("Timeout waiting for goroutines to exit")
 	}
 
-	// Wait for all goroutines managed by errgroup to complete
-	if err := c.eg.Wait(); err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("error while waiting for goroutines to complete: %w", err)
-	}
-
-	return firstErr
+	c.running.Store(false)
+	return nil
 }
 
 // SendAudio sends audio data to the API
@@ -226,17 +205,17 @@ func (c *clientImpl) SendAudio(ctx context.Context, audio []byte) error {
 		return errors.New("client is not running")
 	}
 
-	// Encode audio to base64
-	encAudio := encodeBase64(audio)
+	// Base64 encode the audio data
+	audioBase64 := encodeBase64(audio)
 
-	// Create audio buffer append message
-	appendMsg := AudioBufferAppendRequest{
-		Type:  "input_audio_buffer.append",
-		Audio: encAudio,
+	// Create the audio buffer append message
+	msg := AudioBufferAppendRequest{
+		Type:  ClientEventTypeInputAudioBufferAppend,
+		Audio: audioBase64,
 	}
 
-	// Send the message
-	return c.messageSender.SendMessage(ctx, appendMsg)
+	// Send the message through the connection handler
+	return c.connHandler.SendMessage(ctx, msg)
 }
 
 // CommitAudio signals that the user has finished speaking
@@ -245,13 +224,13 @@ func (c *clientImpl) CommitAudio(ctx context.Context) error {
 		return errors.New("client is not running")
 	}
 
-	// Create commit message
-	commitMsg := AudioBufferCommitRequest{
-		Type: "input_audio_buffer.commit",
+	// Create the commit message
+	msg := AudioBufferCommitRequest{
+		Type: ClientEventTypeInputAudioBufferCommit,
 	}
 
-	// Send the message
-	return c.messageSender.SendMessage(ctx, commitMsg)
+	// Send the message through the connection handler
+	return c.connHandler.SendMessage(ctx, msg)
 }
 
 // SendText sends a text message to the API
@@ -260,9 +239,9 @@ func (c *clientImpl) SendText(ctx context.Context, text string) error {
 		return errors.New("client is not running")
 	}
 
-	// Create text message
-	textMsg := ConversationItemCreateRequest{
-		Type: "conversation.item.create",
+	// Create the message
+	msg := ConversationItemCreateRequest{
+		Type: ClientEventTypeConversationItemCreate,
 		Item: ConversationItem{
 			Role: MessageRoleUser,
 			Type: ItemTypeMessage,
@@ -272,8 +251,8 @@ func (c *clientImpl) SendText(ctx context.Context, text string) error {
 		},
 	}
 
-	// Send the message
-	return c.messageSender.SendMessage(ctx, textMsg)
+	// Send the message through the connection handler
+	return c.connHandler.SendMessage(ctx, msg)
 }
 
 // SetEventHandler registers a handler for specific event types
@@ -391,7 +370,7 @@ func (c *clientImpl) UpdateSession(ctx context.Context, config *Config) error {
 	}
 
 	// Send the update message
-	return c.messageSender.SendMessage(ctx, updateMsg)
+	return c.connHandler.SendMessage(ctx, updateMsg)
 }
 
 // GetResponse returns the current response text and audio
@@ -402,4 +381,22 @@ func (c *clientImpl) GetResponse() (string, []byte) {
 // Helper function to encode audio data in base64
 func encodeBase64(data []byte) string {
 	return EncodeBase64(data)
+}
+
+// Create a proper constructor function for the event processor
+func newEventProcessor(client *clientImpl) *eventProcessor {
+	return &eventProcessor{
+		client:        client,
+		eventChan:     make(chan Event, 100),
+		eventHandlers: make(map[string][]EventHandler),
+		logger:        client.logger.With().Str("component", "event_processor").Logger(),
+	}
+}
+
+// Create a proper constructor function for the response manager
+func newResponseManager(client *clientImpl) *responseManager {
+	return &responseManager{
+		client: client,
+		logger: client.logger.With().Str("component", "response_manager").Logger(),
+	}
 }
