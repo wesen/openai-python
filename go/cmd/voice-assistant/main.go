@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"time"
 
@@ -99,9 +98,11 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 	assembler := realtime.NewResponseAssembler(client)
 
 	// Start the event listener
-	if err := client.ListenForEvents(ctx); err != nil {
-		logger.Fatal().Err(err).Msg("Failed to start event listener")
-	}
+	go func() {
+		if err := client.ListenForEvents(ctx); err != nil {
+			logger.Fatal().Err(err).Msg("Failed to start event listener")
+		}
+	}()
 
 	// Process either text or audio input
 	var responseText string
@@ -140,7 +141,7 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 	logger.Info().Int("bytes", len(responseAudio)).Msg("Received audio response")
 
 	// Save the audio to a file
-	if err := ioutil.WriteFile(outputFile, responseAudio, 0644); err != nil {
+	if err := os.WriteFile(outputFile, responseAudio, 0644); err != nil {
 		logger.Fatal().Err(err).Str("file", outputFile).Msg("Failed to write output file")
 	}
 	logger.Info().Str("file", outputFile).Msg("Audio saved to file")

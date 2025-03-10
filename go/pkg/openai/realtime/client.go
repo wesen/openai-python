@@ -90,4 +90,4 @@ type Event interface {
 }
 
 // EventHandler processes an event from the API
-type EventHandler func(Event) error
+type EventHandler func(ctx context.Context, event Event) error

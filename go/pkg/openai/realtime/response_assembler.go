@@ -40,7 +40,7 @@ func NewResponseAssembler(client Client) *ResponseAssembler {
 }
 
 // handleContentPart handles the response.content_part.added event
-func (ra *ResponseAssembler) handleContentPart(event Event) error {
+func (ra *ResponseAssembler) handleContentPart(ctx context.Context, event Event) error {
 	if e, ok := event.(*ContentPartAddedEvent); ok {
 		ra.mutex.Lock()
 		defer ra.mutex.Unlock()
@@ -51,7 +51,7 @@ func (ra *ResponseAssembler) handleContentPart(event Event) error {
 }
 
 // handleContentDone handles the response.content_part.done event
-func (ra *ResponseAssembler) handleContentDone(event Event) error {
+func (ra *ResponseAssembler) handleContentDone(ctx context.Context, event Event) error {
 	if _, ok := event.(*ContentPartDoneEvent); ok {
 		ra.textDone.Store(true)
 		ra.checkDone()
@@ -60,7 +60,7 @@ func (ra *ResponseAssembler) handleContentDone(event Event) error {
 }
 
 // handleAudioDelta handles the response.audio.delta event
-func (ra *ResponseAssembler) handleAudioDelta(event Event) error {
+func (ra *ResponseAssembler) handleAudioDelta(ctx context.Context, event Event) error {
 	if e, ok := event.(*AudioDeltaEvent); ok {
 		audioBytes, err := base64.StdEncoding.DecodeString(e.Delta)
 		if err != nil {
@@ -75,7 +75,7 @@ func (ra *ResponseAssembler) handleAudioDelta(event Event) error {
 }
 
 // handleAudioDone handles the response.audio.done event
-func (ra *ResponseAssembler) handleAudioDone(event Event) error {
+func (ra *ResponseAssembler) handleAudioDone(ctx context.Context, event Event) error {
 	if _, ok := event.(*AudioDoneEvent); ok {
 		ra.audioDone.Store(true)
 		ra.checkDone()
@@ -84,7 +84,7 @@ func (ra *ResponseAssembler) handleAudioDone(event Event) error {
 }
 
 // handleResponseDone handles the response.done event
-func (ra *ResponseAssembler) handleResponseDone(event Event) error {
+func (ra *ResponseAssembler) handleResponseDone(ctx context.Context, event Event) error {
 	if _, ok := event.(*ResponseDoneEvent); ok {
 		ra.textDone.Store(true)
 		ra.audioDone.Store(true)

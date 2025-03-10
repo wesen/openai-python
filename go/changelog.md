@@ -201,4 +201,24 @@ Fixed various linter errors and cleaned up the codebase after the WebSocket conn
 
 These changes further improve the code quality and maintainability of the OpenAI Realtime API client.
 
+## Fixed WebSocket Concurrent Access Issue
+
+Fixed a critical issue with concurrent access to the WebSocket connection that was causing panic errors:
+
+- Redesigned the connection handler to use a single main goroutine for processing all WebSocket operations
+- Implemented a non-blocking read approach using channels to safely forward messages to the main loop
+- Eliminated the separate reader goroutine that was causing race conditions with the WebSocket connection
+- Ensured all WebSocket read and write operations happen in a coordinated way from a single execution context
+
+These changes resolve the "concurrent write to websocket connection" panic error and further improve the stability of the WebSocket connection handling.
+
+## Fixed ConversationItem Content Type
+
+Fixed a type mismatch in the ConversationItem struct that was causing API errors when sending messages.
+
+### Changed
+- Modified `ConversationItem.Content` to be an array of `ContentPart` objects instead of a single `ItemContent` object to match the API's expected format
+- Updated the `SendText` method to create an array of ContentPart objects with the proper type
+- Added a test to validate the correct JSON serialization of ConversationItem
+
 # Changelog 

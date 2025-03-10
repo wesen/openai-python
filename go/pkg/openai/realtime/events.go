@@ -166,7 +166,7 @@ type ConversationItem struct {
 	ID       string                 `json:"id,omitempty"`
 	Role     MessageRole            `json:"role"` // user, assistant, or system
 	Type     ItemType               `json:"type"` // message, function_call, etc.
-	Content  ItemContent            `json:"content"`
+	Content  []ContentPart          `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
