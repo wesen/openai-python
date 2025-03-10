@@ -35,7 +35,9 @@ type clientImpl struct {
 	cancelFunc context.CancelFunc
 
 	// Session state
-	sessionID atomic.Value // string
+	sessionID        atomic.Value // string
+	sessionCreatedCh chan struct{}
+	sessionMutex     sync.RWMutex
 }
 
 // NewClient creates a new OpenAI realtime client with default settings
@@ -77,6 +79,11 @@ func (c *clientImpl) Connect(ctx context.Context) error {
 	// Create a new context with cancellation
 	c.ctx, c.cancelFunc = context.WithCancel(ctx)
 
+	// Reset the session created channel
+	c.sessionMutex.Lock()
+	c.sessionCreatedCh = make(chan struct{})
+	c.sessionMutex.Unlock()
+
 	// Connect the connection handler
 	if err := c.connHandler.Connect(ctx); err != nil {
 		c.logger.Error().Err(err).Msg("Failed to connect")
@@ -93,6 +100,7 @@ func (c *clientImpl) initializeComponents() {
 	// Initialize event handling
 	c.eventHandlers = make(map[string][]EventHandler)
 	c.eventChan = make(chan []byte, 100)
+	c.sessionCreatedCh = make(chan struct{})
 
 	// Create the connection handler
 	c.connHandler = newConnectionHandler(c)
@@ -110,8 +118,6 @@ func (c *clientImpl) initializeComponents() {
 func (c *clientImpl) Close(ctx context.Context) error {
 	c.logger.Debug().Msg("Closing client")
 
-	c.logger.Debug().Msg("Closing client")
-
 	// Cancel the context to signal all components to stop
 	c.cancelFunc()
 
@@ -119,6 +125,9 @@ func (c *clientImpl) Close(ctx context.Context) error {
 	if err := c.connHandler.Close(ctx); err != nil {
 		c.logger.Error().Err(err).Msg("Error closing connection handler")
 	}
+
+	// Reset the session ID
+	c.sessionID.Store("")
 
 	// Wait for the remaining goroutines to exit with a timeout
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -209,21 +218,107 @@ func (c *clientImpl) SetEventHandler(eventType string, handler EventHandler) {
 func (c *clientImpl) ListenForEvents(ctx context.Context) error {
 	c.logger.Debug().Msg("Starting to listen for events")
 
-	// Create an error group for managing the goroutines
-	eg, egCtx := errgroup.WithContext(ctx)
+	// Create context with cancellation for goroutines
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	// Start event listening with session notification
+	eg, egCtx := errgroup.WithContext(runCtx)
 
 	// Start the connection handler
 	eg.Go(func() error {
 		return c.connHandler.Run(egCtx)
 	})
 
-	// Start the event processing loop
+	// Start the event processing loop with session detection
 	eg.Go(func() error {
-		return c.processEvents(egCtx)
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case eventData := <-c.eventChan:
+				// First, determine if this is a session.created event
+				var rawEvent struct {
+					Type string `json:"type"`
+				}
+				if err := json.Unmarshal(eventData, &rawEvent); err == nil &&
+					rawEvent.Type == EventSessionCreated {
+					// Parse the session event to get the session ID
+					var sessionEvent SessionCreatedEvent
+					if err := json.Unmarshal(eventData, &sessionEvent); err == nil {
+						// Store the session ID
+						c.sessionID.Store(sessionEvent.Session.ID)
+						c.logger.Info().
+							Str("session_id", sessionEvent.Session.ID).
+							Msg("Session created, signaling listeners")
+
+						// Signal that session has been created (only once)
+						select {
+						case <-c.sessionCreatedCh: // Already closed
+						default:
+							close(c.sessionCreatedCh)
+						}
+					}
+				}
+
+				// Process the event normally
+				c.ProcessRawEvent(egCtx, eventData)
+			}
+		}
 	})
 
-	// Wait for both goroutines to complete
+	// The goroutines continue running in the background
 	return eg.Wait()
+}
+
+// WaitForSessionEvent waits for a specific session event to occur
+func (c *clientImpl) waitForSessionEvent(ctx context.Context, eventType string) error {
+	c.logger.Debug().Str("event_type", eventType).Msg("Waiting for session event")
+
+	// Create channel to signal when the event is received
+	eventReceivedCh := make(chan struct{})
+
+	// Create handler for this specific event
+	var handlerFunc EventHandler = func(ctx context.Context, event Event) error {
+		c.logger.Debug().Str("event_type", event.Type()).Msg("Received expected session event")
+		close(eventReceivedCh)
+		return nil
+	}
+
+	// Register temporary handler
+	c.handlersMutex.Lock()
+	if c.eventHandlers == nil {
+		c.eventHandlers = make(map[string][]EventHandler)
+	}
+	c.eventHandlers[eventType] = append(c.eventHandlers[eventType], handlerFunc)
+	c.handlersMutex.Unlock()
+
+	// Clean up the handler when done
+	defer func() {
+		c.handlersMutex.Lock()
+		defer c.handlersMutex.Unlock()
+
+		// Remove our handler from the slice
+		handlers := c.eventHandlers[eventType]
+		for i, h := range handlers {
+			// Compare function pointers - this is a bit of a hack but should work
+			// since we're only removing our own handler that we just added
+			if fmt.Sprintf("%p", h) == fmt.Sprintf("%p", handlerFunc) {
+				c.eventHandlers[eventType] = append(handlers[:i], handlers[i+1:]...)
+				break
+			}
+		}
+	}()
+
+	// Wait for the event or context cancellation
+	select {
+	case <-eventReceivedCh:
+		c.logger.Debug().Str("event_type", eventType).Msg("Session event received")
+		return nil
+	case <-ctx.Done():
+		c.logger.Debug().Str("event_type", eventType).Msg("Context cancelled while waiting for session event")
+		return ctx.Err()
+	}
 }
 
 // processEvents runs a loop to process incoming events from the event channel
@@ -514,7 +609,7 @@ func newResponseManager(client *clientImpl) *responseManager {
 	}
 }
 
-// UpdateSession updates the session configuration
+// UpdateSession updates the session configuration and waits for confirmation
 func (c *clientImpl) UpdateSession(ctx context.Context, config *Config) error {
 	c.logger.Debug().Str("session", c.sessionID.Load().(string)).Msg("Updating session")
 
@@ -608,11 +703,30 @@ func (c *clientImpl) UpdateSession(ctx context.Context, config *Config) error {
 	}
 
 	// Send the update message
-	return c.connHandler.SendMessage(ctx, updateMsg)
+	if err := c.connHandler.SendMessage(ctx, updateMsg); err != nil {
+		return err
+	}
+
+	// Wait for session.updated event to confirm the update was processed
+	return c.waitForSessionEvent(ctx, EventSessionUpdated)
 }
 
 // GetResponse returns the current response text and audio
 func (c *clientImpl) GetResponse() (string, []byte) {
 	c.logger.Debug().Msg("Getting current response")
 	return c.responseManager.GetResponse()
+}
+
+// WaitForSessionCreated waits for the session to be created
+func (c *clientImpl) WaitForSessionCreated(ctx context.Context) error {
+	c.logger.Debug().Msg("Waiting for session to be created")
+
+	select {
+	case <-c.sessionCreatedCh:
+		c.logger.Debug().Msg("Session created")
+		return nil
+	case <-ctx.Done():
+		c.logger.Debug().Msg("Context cancelled while waiting for session to be created")
+		return ctx.Err()
+	}
 }

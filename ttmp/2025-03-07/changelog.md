@@ -68,3 +68,29 @@ Completely redesigned the event handling architecture to be more efficient and m
 - Simplified component initialization with direct event handling
 - Improved error propagation through channel-based processing
 - Removed redundant function indirection for better performance 
+
+# Improved session handling with event synchronization
+
+Enhanced session handling to ensure proper synchronization between client operations and server state:
+
+- Modified ListenForEvents to wait for session.created event before returning
+- Added waitForSessionEvent utility method to synchronize on specific session events
+- Updated UpdateSession to wait for session.updated event before completion
+- Implemented event-based confirmation of session configuration changes
+- Added proper cleanup of temporary event handlers to prevent memory leaks
+- Ensured that API operations don't proceed until the server confirms session state
+- Improved error handling for session event timeouts
+- Added detailed logging for session event waiting and completion 
+
+# Added public session state management API
+
+Expanded the client interface with methods for managing and waiting on session state:
+
+- Added WaitForSessionCreated method to allow clients to wait for session initialization
+- Made session state management part of the public Client interface
+- Integrated session state channel into the client lifecycle
+- Added thread-safe session state access with proper mutex protection
+- Ensured proper channel initialization and cleanup during connect/disconnect
+- Improved session state reset during reconnection
+- Added clear documentation for the new session management methods
+- Enhanced session-related logging for better troubleshooting 

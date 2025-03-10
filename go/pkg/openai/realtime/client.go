@@ -35,6 +35,12 @@ type Client interface {
 
 	// SetLogger sets the logger for the client
 	SetLogger(logger zerolog.Logger)
+
+	// WaitForSessionCreated waits for the session to be created
+	WaitForSessionCreated(ctx context.Context) error
+
+	// GetResponse returns the current response text and audio
+	GetResponse() (string, []byte)
 }
 
 // Config stores configuration options for the Realtime client

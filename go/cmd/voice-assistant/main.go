@@ -87,6 +87,18 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 	}
 	defer client.Close(ctx)
 
+	// Start the event listener
+	go func() {
+		if err := client.ListenForEvents(ctx); err != nil {
+			logger.Fatal().Err(err).Msg("Failed to start event listener")
+		}
+	}()
+
+	err := client.WaitForSessionCreated(ctx)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to wait for session to be created")
+	}
+
 	// Update session with our configuration
 	if err := client.UpdateSession(ctx, config); err != nil {
 		logger.Fatal().Err(err).Msg("Failed to update session")
@@ -97,17 +109,9 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 	// Create a response assembler to help with handling responses
 	assembler := realtime.NewResponseAssembler(client)
 
-	// Start the event listener
-	go func() {
-		if err := client.ListenForEvents(ctx); err != nil {
-			logger.Fatal().Err(err).Msg("Failed to start event listener")
-		}
-	}()
-
 	// Process either text or audio input
 	var responseText string
 	var responseAudio []byte
-	var err error
 
 	if textInput != "" {
 		// Send text input
