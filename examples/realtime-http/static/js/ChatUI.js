@@ -65,10 +65,36 @@ class ChatUI {
     // Add error message to chat
     const errorDiv = document.createElement('div');
     errorDiv.classList.add('message', 'error-message');
-    errorDiv.textContent = `Error: ${message}`;
+    
+    // Create a header for the error
+    const errorHeader = document.createElement('strong');
+    errorHeader.textContent = 'Error: ';
+    errorDiv.appendChild(errorHeader);
+    
+    // Add the message text
+    const errorText = document.createTextNode(message);
+    errorDiv.appendChild(errorText);
+    
+    // If there's an existing error with the same message, remove it
+    const existingErrors = this.chatMessages.querySelectorAll('.error-message');
+    existingErrors.forEach(error => {
+      if (error.textContent === errorDiv.textContent) {
+        error.remove();
+      }
+    });
     
     this.chatMessages.appendChild(errorDiv);
     this.scrollToBottom();
+    
+    // Make error messages fade after a while
+    setTimeout(() => {
+      errorDiv.classList.add('fade-out');
+      setTimeout(() => {
+        if (errorDiv.parentNode) {
+          errorDiv.parentNode.removeChild(errorDiv);
+        }
+      }, 1000);
+    }, 10000);
     
     return errorDiv;
   }

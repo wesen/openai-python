@@ -182,6 +182,21 @@ class MessageHandler {
    */
   handleError(message) {
     console.error('Error from server:', message.message);
+    
+    // Add specific handling for known backend errors
+    if (message.message && message.message.includes('AsyncRealtimeConnectionManager')) {
+      // This is a backend configuration issue
+      const errorMessage = 'Server configuration issue detected. The application will try to reconnect automatically. ' +
+                         'If problems persist, please try refreshing the page.';
+      this.chatUI.showError(errorMessage);
+      
+      // Reset any active audio
+      this.audioManager.stopAllAudio();
+      
+      return;
+    }
+    
+    // Handle other types of errors
     this.chatUI.showError(message.message);
   }
 

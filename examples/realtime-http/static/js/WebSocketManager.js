@@ -123,6 +123,36 @@ class WebSocketManager {
       const message = JSON.parse(event.data);
       console.log('Received message:', message); // Debug all incoming messages
       
+      // Special handling for backend connection errors
+      if (message.type === 'error' && 
+          message.message && 
+          message.message.includes('AsyncRealtimeConnectionManager')) {
+        
+        console.error('Backend connection manager error detected', message);
+        
+        // Provide a more user-friendly error message
+        const userMessage = {
+          type: 'error',
+          message: 'Server connection issue detected. This is likely a backend configuration problem. ' + 
+                  'Please try refreshing the page or contact the administrator. ' +
+                  '(Original error: ' + message.message + ')'
+        };
+        
+        // Pass the modified message to the callback
+        if (this.onMessageCallback) {
+          this.onMessageCallback(userMessage);
+        }
+        
+        // After a brief delay, try to reconnect
+        setTimeout(() => {
+          console.log('Attempting to reconnect after backend error...');
+          this.disconnect();
+          this.connect();
+        }, 5000);
+        
+        return;
+      }
+      
       // Pass the message to the callback
       if (this.onMessageCallback) {
         this.onMessageCallback(message);

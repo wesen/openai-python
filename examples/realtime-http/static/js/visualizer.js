@@ -104,3 +104,5 @@ class AudioVisualizer {
         }
     }
 } 
+
+export default AudioVisualizer;

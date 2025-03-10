@@ -19,6 +19,9 @@ class AudioProcessor {
         this.isPlaying = false;
         this.currentSource = null;
         this.audioFormatSent = false;
+        
+        // Fallback mode flag
+        this.textOnlyMode = false;
     }
 
     /**
@@ -32,6 +35,22 @@ class AudioProcessor {
                 sampleRate: this.sampleRate
             });
             console.log('AudioProcessor: Audio context created with sample rate:', this.sampleRate);
+            
+            // Check if mediaDevices API is available
+            if (!navigator.mediaDevices) {
+                console.error('AudioProcessor ERROR: navigator.mediaDevices is not available in this browser or context');
+                console.error('This is typically because the page is not being served over HTTPS, or the browser doesn\'t support the Web Audio API');
+                console.error('If running locally, try using localhost instead of an IP address, or enable HTTPS');
+                
+                // Enable text-only mode
+                this.textOnlyMode = true;
+                console.warn('AudioProcessor: Falling back to text-only mode');
+                
+                // Create empty visualization data for visualizer
+                this.dataArray = new Uint8Array(128).fill(0);
+                
+                return true; // Return true to allow text-based interaction
+            }
             
             // Request microphone access
             console.log('AudioProcessor: Requesting microphone access...');
@@ -60,7 +79,26 @@ class AudioProcessor {
             return true;
         } catch (error) {
             console.error('AudioProcessor ERROR: Error initializing audio:', error);
-            return false;
+            // Provide more helpful error message based on the error
+            if (error.name === 'NotAllowedError') {
+                console.error('AudioProcessor ERROR: Microphone access denied by user or the system');
+            } else if (error.name === 'NotFoundError') {
+                console.error('AudioProcessor ERROR: No microphone found on this device');
+            } else if (error.name === 'NotReadableError') {
+                console.error('AudioProcessor ERROR: Microphone is already in use by another application');
+            } else if (error.name === 'SecurityError') {
+                console.error('AudioProcessor ERROR: Media access is restricted due to security policy');
+                console.error('This usually happens when the page is not served over HTTPS');
+            }
+            
+            // Enable text-only mode as a fallback
+            this.textOnlyMode = true;
+            console.warn('AudioProcessor: Falling back to text-only mode');
+            
+            // Create empty visualization data for visualizer
+            this.dataArray = new Uint8Array(128).fill(0);
+            
+            return true; // Return true to allow text-based interaction
         }
     }
 
@@ -70,6 +108,13 @@ class AudioProcessor {
      */
     startRecording(onDataAvailable) {
         console.log('AudioProcessor: Starting recording...');
+        
+        // Check if we're in text-only mode
+        if (this.textOnlyMode) {
+            console.warn('AudioProcessor: Cannot start recording in text-only mode');
+            return false;
+        }
+        
         if (!this.stream) {
             console.error('AudioProcessor ERROR: Audio stream not initialized');
             return false;
@@ -210,6 +255,11 @@ class AudioProcessor {
      * @returns {Uint8Array} - Audio frequency data
      */
     getVisualizationData() {
+        if (this.textOnlyMode) {
+            // In text-only mode, return empty visualization data
+            return this.dataArray;
+        }
+        
         if (this.analyser) {
             this.analyser.getByteFrequencyData(this.dataArray);
             return this.dataArray;
@@ -541,3 +591,5 @@ class AudioProcessor {
         }
     }
 } 
+
+export default AudioProcessor;

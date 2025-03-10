@@ -6,6 +6,7 @@ import MessageHandler from './MessageHandler.js';
 import ChatUI from './ChatUI.js';
 import AudioManager from './AudioManager.js';
 import config from './config.js';
+import AudioVisualizer from './visualizer.js';
 
 class App {
   /**
@@ -46,7 +47,6 @@ class App {
     try {
       // Initialize audio visualizer
       console.log('Initializing audio visualizer');
-      const AudioVisualizer = (await import('./visualizer.js')).default;
       this.visualizer = new AudioVisualizer('visualizer');
       
       // Initialize audio manager
@@ -54,9 +54,12 @@ class App {
       this.audioManager = new AudioManager(this.visualizer);
       const audioInitialized = await this.audioManager.initialize();
       if (!audioInitialized) {
-        this.chatUI.showError('Failed to initialize audio. Please check your microphone permissions.');
-        console.error('Audio initialization failed');
-        return false;
+        this.chatUI.showError('Failed to initialize audio. Please check your microphone permissions or try using HTTPS.');
+        console.error('Audio initialization failed - continuing with limited functionality');
+        // Disable recording buttons
+        this.elements.startRecordingBtn.disabled = true;
+        this.elements.stopRecordingBtn.disabled = true;
+        // We'll continue with initialization but disable audio recording features
       }
       
       // Initialize message handler

@@ -1,3 +1,4 @@
+import AudioProcessor from './audio-processor.js';
 /**
  * Manages audio recording and playback
  */
@@ -21,7 +22,6 @@ class AudioManager {
     try {
       console.log('Initializing audio processor');
       // Import the AudioProcessor dynamically
-      const AudioProcessor = (await import('./audio-processor.js')).default;
       this.audioProcessor = new AudioProcessor();
       
       const audioInitialized = await this.audioProcessor.initialize();
@@ -34,7 +34,13 @@ class AudioManager {
       
       // Initialize visualizer with the audio processor
       if (this.visualizer) {
-        this.visualizer.setAudioProcessor(this.audioProcessor);
+        // Check if the visualizer has the setAudioProcessor method
+        if (typeof this.visualizer.setAudioProcessor === 'function') {
+          this.visualizer.setAudioProcessor(this.audioProcessor);
+        } else {
+          // If no setAudioProcessor method, it might be using direct reference
+          this.visualizer.audioProcessor = this.audioProcessor;
+        }
         console.log('Audio visualizer initialized');
       }
       

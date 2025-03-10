@@ -7,10 +7,11 @@ import os
 import asyncio
 import logging
 import base64
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional, Callable, Awaitable, Type, TypeVar, Union
 
 from openai import AsyncOpenAI
 from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
+from openai.resources.beta.realtime.realtime import AsyncRealtimeConnectionManager
 
 # Configure logging
 logger = logging.getLogger("realtime-http.openai")
@@ -32,26 +33,33 @@ class OpenAIRealtimeClient:
         self.message_handler = message_handler
         self.connection: Optional[AsyncRealtimeConnection] = None
         self.connection_task: Optional[asyncio.Task] = None
+        self.connection_established = asyncio.Event()
+        self.running = False
         
     async def connect(self):
         """Establish a connection to OpenAI's Realtime API."""
         try:
-            # Use the proper async context manager pattern
-            self.connection = await client.beta.realtime.connect(model="gpt-4o-realtime-preview")
-            logger.info("OpenAI Realtime connection established")
+            # Start a task that will manage the connection using async with
+            self.running = True
+            self.connection_established.clear()
+            self.connection_task = asyncio.create_task(self._connection_manager())
             
-            # Set up server-side VAD (Voice Activity Detection)
-            logger.debug("Setting up server-side VAD")
-            await self.connection.session.update(session={
-                "turn_detection": {"type": "server_vad"},
-                "input_audio_transcription": {
-                    "model": "whisper-1"
-                }
-            })
-            
-            # Start listening for events from OpenAI
-            self.connection_task = asyncio.create_task(self.handle_openai_events())
-            return True
+            # Wait for connection to be established or fail
+            try:
+                await asyncio.wait_for(self.connection_established.wait(), timeout=10.0)
+                if self.connection:
+                    return True
+                else:
+                    return False
+            except asyncio.TimeoutError:
+                logger.error("Timeout waiting for OpenAI connection to establish")
+                await self.message_handler({
+                    "type": "error",
+                    "message": "Connection timeout: OpenAI connection could not be established"
+                })
+                await self.disconnect()
+                return False
+                
         except Exception as e:
             logger.error(f"Error connecting to OpenAI: {e}", exc_info=True)
             await self.message_handler({
@@ -60,15 +68,49 @@ class OpenAIRealtimeClient:
             })
             return False
     
+    async def _connection_manager(self):
+        """Internal method that manages the connection lifecycle using async with."""
+        try:
+            async with client.beta.realtime.connect(model="gpt-4o-realtime-preview") as connection:
+                self.connection = connection
+                logger.info("OpenAI Realtime connection established")
+                
+                # Set up server-side VAD (Voice Activity Detection)
+                logger.debug("Setting up server-side VAD")
+                await self.connection.session.update(session={
+                    "turn_detection": {"type": "server_vad"},
+                    "input_audio_transcription": {
+                        "model": "whisper-1"
+                    }
+                })
+                
+                # Signal that connection is established
+                self.connection_established.set()
+                
+                # Handle OpenAI events
+                await self.handle_openai_events()
+        except Exception as e:
+            self.connection = None
+            logger.error(f"Connection manager error: {e}", exc_info=True)
+            await self.message_handler({
+                "type": "error",
+                "message": f"OpenAI connection error: {str(e)}"
+            })
+        finally:
+            self.connection_established.set()  # Make sure to unblock any waiting code
+            self.connection = None
+    
     async def disconnect(self):
         """Disconnect from OpenAI's Realtime API."""
-        if self.connection_task:
+        self.running = False
+        if self.connection_task and not self.connection_task.done():
             self.connection_task.cancel()
+            try:
+                await self.connection_task
+            except (asyncio.CancelledError, Exception):
+                pass
             self.connection_task = None
-        
-        if self.connection:
-            await self.connection.close()
-            self.connection = None
+            logger.info("OpenAI Realtime connection closed")
     
     async def send_audio(self, audio_data: str):
         """
@@ -128,14 +170,18 @@ class OpenAIRealtimeClient:
             return False
     
     async def handle_openai_events(self):
-        """Handle events from OpenAI."""
-        last_audio_item_id = None
-        accumulated_text = {}
-        user_transcripts = {}  # Store user transcripts
-        
+        """Listen for and handle events from the OpenAI Realtime API."""
+        if not self.connection:
+            logger.error("Cannot handle events: No active connection")
+            return
+
+        # Main event loop
         try:
             logger.info("Starting to listen for OpenAI events")
             async for event in self.connection:
+                if not self.running:
+                    break
+                    
                 logger.debug(f"Received OpenAI event: {event.type}")
                 
                 if event.type == "session.created":
