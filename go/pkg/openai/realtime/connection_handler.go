@@ -149,8 +149,10 @@ func (ch *connectionHandler) Run(ctx context.Context) error {
 					ch.logger.Warn().Err(err).Msg("Error setting read deadline")
 				}
 
+				ch.logger.Debug().Msg("Reading message")
 				_, message, err := ch.conn.ReadMessage()
 				if err != nil {
+					ch.logger.Warn().Err(err).Msg("Error reading message")
 					select {
 					case <-egCtx.Done():
 						return egCtx.Err()
@@ -158,6 +160,7 @@ func (ch *connectionHandler) Run(ctx context.Context) error {
 						return err
 					}
 				}
+				ch.logger.Debug().Str("message", string(message)).Msg("Message read")
 
 				select {
 				case readChan <- message:

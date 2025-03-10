@@ -78,6 +78,8 @@ func runVoiceAssistant(cmd *cobra.Command, args []string) {
 		Voice:        realtime.Voice(voice),
 		Modalities:   []string{"text", "audio"},
 		Instructions: instructions,
+
+		TurnDetection: realtime.TurnDetectionTypeServerVAD,
 	}
 
 	// Connect to the API

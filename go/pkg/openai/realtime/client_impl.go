@@ -198,7 +198,21 @@ func (c *clientImpl) SendText(ctx context.Context, text string) error {
 	}
 
 	// Send the message through the connection handler
-	return c.connHandler.SendMessage(ctx, msg)
+	err := c.connHandler.SendMessage(ctx, msg)
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Failed to send text message")
+		return err
+	}
+
+	err = c.connHandler.SendMessage(ctx, ResponseCreateRequest{
+		Type: ClientEventTypeResponseCreate,
+	})
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Failed to send response create message")
+		return err
+	}
+
+	return nil
 }
 
 // SetEventHandler registers a handler for specific event types
