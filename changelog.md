@@ -49,3 +49,25 @@ Split the monolithic client_impl.go file into separate component files for bette
 - Added detailed logging of raw JSON data before unmarshaling to diagnose type mismatches
 - Improved error reporting when parsing events to show the actual JSON data causing problems
 - Fixed an issue where max_response_output_tokens could be received as a string but was expected as an int 
+
+## Improved Error Handling for Backend Connection Issues
+
+### Why
+Enhanced the frontend application to better handle backend connection errors, particularly for AsyncRealtimeConnectionManager issues.
+
+- Added specific error detection and handling for AsyncRealtimeConnectionManager errors
+- Implemented improved user-friendly error messages with automatic cleanup
+- Added automatic reconnection attempts when backend errors occur
+- Styled error messages to be more visible and then fade out automatically
+- Made the application more resilient to server-side configuration issues
+
+## Audio API Compatibility Improvements
+
+### Why
+Fixed issues with the realtime audio example JavaScript files to improve compatibility across different browsers and environments.
+
+- Fixed import/export syntax by adding type="module" to script tags
+- Added robust error handling for environments where navigator.mediaDevices is undefined
+- Implemented a text-only fallback mode when audio APIs are unavailable
+- Made the application more resilient by continuing initialization even when audio fails
+- Fixed issues with module imports in main.js and audio-processor.js 
