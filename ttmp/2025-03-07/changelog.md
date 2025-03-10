@@ -54,3 +54,17 @@ Consolidated the codebase by merging event_processor.go into client_impl.go:
 - Removed the now-redundant event_processor.go file
 - Improved code organization by keeping related components together
 - Simplified the codebase structure while preserving the functionality 
+
+# Restructured event handling with channel-based architecture
+
+Completely redesigned the event handling architecture to be more efficient and maintainable:
+
+- Merged eventProcessor struct directly into clientImpl
+- Added an event channel in clientImpl to receive events from the connection handler
+- Updated connectionHandler to forward WebSocket messages to the client's channel
+- Implemented parallel processing with errgroup: one goroutine handles the WebSocket connection, another processes events
+- Removed references to the event processor from connectionHandler
+- Enhanced ListenForEvents to manage both connection and event processing loops
+- Simplified component initialization with direct event handling
+- Improved error propagation through channel-based processing
+- Removed redundant function indirection for better performance 

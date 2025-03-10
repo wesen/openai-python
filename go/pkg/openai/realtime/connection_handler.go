@@ -20,13 +20,12 @@ import (
 // connectionHandler manages the WebSocket connection and all message sending
 // It combines the functionality of the previous connectionManager and messageSender
 type connectionHandler struct {
-	client         *clientImpl
-	conn           *websocket.Conn // Owned exclusively by the handler goroutine
-	msgQueue       chan interface{}
-	pingTicker     *time.Ticker
-	logger         zerolog.Logger
-	running        atomic.Bool
-	eventProcessor *eventProcessor // Reference to the event processor
+	client     *clientImpl
+	conn       *websocket.Conn // Owned exclusively by the handler goroutine
+	msgQueue   chan interface{}
+	pingTicker *time.Ticker
+	logger     zerolog.Logger
+	running    atomic.Bool
 }
 
 // newConnectionHandler creates a new unified connection handler
@@ -183,10 +182,14 @@ func (ch *connectionHandler) Run(ctx context.Context) error {
 					Int("message_length", len(message)).
 					Msg("Received WebSocket message")
 
-				if ch.eventProcessor != nil {
-					ch.eventProcessor.ProcessRawEvent(egCtx, message)
-				} else {
-					ch.logger.Warn().Msg("Received message but event processor not set")
+				// Forward the message to the client's event channel
+				select {
+				case ch.client.eventChan <- message:
+					// Message forwarded successfully
+				case <-egCtx.Done():
+					return egCtx.Err()
+				default:
+					ch.logger.Warn().Msg("Event channel full, dropping message")
 				}
 
 			case <-ch.pingTicker.C:
@@ -258,12 +261,6 @@ func (ch *connectionHandler) Close(ctx context.Context) error {
 	// will trigger cleanup in the handler goroutine
 
 	return nil
-}
-
-// SetEventProcessor sets the event processor reference
-func (ch *connectionHandler) SetEventProcessor(processor *eventProcessor) {
-	ch.logger.Debug().Msg("Setting event processor")
-	ch.eventProcessor = processor
 }
 
 // SendMessage queues a message to be sent
